@@ -26,7 +26,7 @@
           <button type="button" data-view="collection" class="active">Games collection</button>
           <button type="button" data-view="wishlist">Games wishlist</button>
           <button type="button" data-view="sold">Sold / traded</button>
-          <button type="button" data-view="finn">FINN / eBay</button>
+          <button type="button" data-view="finn">Markets</button>
           <button type="button" data-view="consoles">Console Collection</button>
           <button type="button" data-view="peripherals">Peripherals collection</button>
           <button type="button" id="catalog-btn">Catalog</button>
@@ -172,8 +172,14 @@
     <dialog id="catalog-dialog">
       <form id="catalog-form">
         <h2>Game catalog</h2>
-        <p class="meta">Wikipedia is a general encyclopedia, so title matches are messy. RAWG is a games database. Get a free key at <a href="https://rawg.io/apidocs" target="_blank" rel="noopener">rawg.io/apidocs</a>. eBay listing checks use a free App ID from <a href="https://developer.ebay.com/" target="_blank" rel="noopener">developer.ebay.com</a> (Finding API). Leave a field blank to keep the key you already saved.</p>
+        <p class="meta">Wikipedia is a general encyclopedia, so title matches are messy. RAWG is a games database. Get a free key at <a href="https://rawg.io/apidocs" target="_blank" rel="noopener">rawg.io/apidocs</a>. Country sets shelf currency, the local classifieds site (FINN, Blocket, Tori, DBA, …), and which eBay site to search. eBay listing checks use a free App ID from <a href="https://developer.ebay.com/" target="_blank" rel="noopener">developer.ebay.com</a>. Leave a key field blank to keep the key you already saved.</p>
         <p class="meta" id="catalog-status"></p>
+        <label>
+          Country / currency
+          <select name="locale">
+            <option value="auto">Detect from this browser</option>
+          </select>
+        </label>
         <label>
           RAWG API key
           <input name="rawgKey" type="password" autocomplete="off" placeholder="Paste key" />
@@ -184,7 +190,7 @@
         </label>
         <menu>
           <button type="button" id="catalog-cancel" class="ghost">Close</button>
-          <button class="primary">Save key</button>
+          <button class="primary">Save</button>
         </menu>
       </form>
     </dialog>

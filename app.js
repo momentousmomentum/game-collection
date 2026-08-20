@@ -112,10 +112,31 @@ const copy = {
   collection: { title: "Games collection", eyebrow: "Your copies" },
   wishlist: { title: "Games wishlist", eyebrow: "Still hunting" },
   sold: { title: "Sold / traded", eyebrow: "No longer on the shelf" },
-  finn: { title: "FINN / eBay", eyebrow: "Wishlist on the market" },
+  finn: { title: "Markets", eyebrow: "Wishlist on the market" },
   consoles: { title: "Console Collection", eyebrow: "What you own" },
   peripherals: { title: "Peripherals collection", eyebrow: "Pads, cameras, multitaps" },
 };
+
+let marketPrefs = { locale: "auto", currency: "USD", display: undefined, classifiedsName: "" };
+
+function applyMarketSettings(data) {
+  const resolved = data?.resolved || {};
+  marketPrefs = {
+    locale: data?.locale || "auto",
+    currency: resolved.currency || "USD",
+    display: resolved.display,
+    classifiedsName: resolved.classifieds?.name || "",
+  };
+  const navLabel = marketPrefs.classifiedsName ? `${marketPrefs.classifiedsName} / eBay` : "eBay";
+  copy.finn = { title: navLabel, eyebrow: "Wishlist on the market" };
+  document.querySelectorAll('.nav [data-view="finn"]').forEach((btn) => {
+    btn.textContent = navLabel;
+  });
+  if (els.title && view === "finn") els.title.textContent = copy.finn.title;
+  if (els.eyebrow && view === "finn") els.eyebrow.textContent = copy.finn.eyebrow;
+  document.dispatchEvent(new CustomEvent("shelf:market", { detail: resolved }));
+  if (typeof state !== "undefined" && state) render();
+}
 
 const els = {
   views: {
@@ -371,9 +392,18 @@ function kitLabel(item) {
   return bits.join(" · ");
 }
 
-function money(value) {
+function money(value, currency) {
   if (value == null || value === "" || Number.isNaN(Number(value))) return "";
-  return `${Number(value).toFixed(Number(value) % 1 ? 2 : 0)} kr`;
+  const code = currency || marketPrefs.currency || "USD";
+  try {
+    return new Intl.NumberFormat(marketPrefs.display || undefined, {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: Number(value) % 1 ? 2 : 0,
+    }).format(Number(value));
+  } catch {
+    return `${Number(value).toFixed(Number(value) % 1 ? 2 : 0)} ${code}`;
+  }
 }
 
 function sumSpent() {
@@ -1961,14 +1991,26 @@ els.cancel?.addEventListener("click", () => els.dialog.close());
 els.catalogBtn?.addEventListener("click", async () => {
   try {
     const data = await (await fetch("/api/settings")).json();
+    applyMarketSettings(data);
+    const select = els.catalogForm?.elements.locale;
+    if (select) {
+      const current = data.locale || "auto";
+      select.innerHTML = `<option value="auto">Detect from this browser</option>${(data.markets || [])
+        .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`)
+        .join("")}`;
+      select.value = [...select.options].some((opt) => opt.value === current) ? current : "auto";
+    }
     if (els.catalogStatus) {
+      const place = data.resolved
+        ? ` Prices and the market tab use ${data.resolved.currency}${data.resolved.classifieds ? ` and ${data.resolved.classifieds.name}` : ""}.`
+        : "";
       const rawg = data.rawg
         ? "RAWG is connected. Title search will use the games database."
         : "No RAWG key yet — search still uses Wikipedia until you save one.";
       const ebay = data.ebay
         ? " eBay App ID is saved for wishlist listings."
         : " eBay listings work best with an App ID; search links still work without one.";
-      els.catalogStatus.textContent = rawg + ebay;
+      els.catalogStatus.textContent = rawg + ebay + place;
     }
   } catch {
     if (els.catalogStatus) els.catalogStatus.textContent = "Could not read catalog settings.";
@@ -1978,17 +2020,11 @@ els.catalogBtn?.addEventListener("click", async () => {
 els.catalogCancel?.addEventListener("click", () => els.catalogDialog.close());
 els.catalogForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const payload = {};
+  const payload = { locale: els.catalogForm.elements.locale?.value || "auto" };
   const rawg_key = els.catalogForm.elements.rawgKey.value.trim();
   const ebay_app_id = els.catalogForm.elements.ebayAppId?.value.trim() || "";
   if (rawg_key) payload.rawg_key = rawg_key;
   if (ebay_app_id) payload.ebay_app_id = ebay_app_id;
-  if (!Object.keys(payload).length) {
-    if (els.catalogStatus) {
-      els.catalogStatus.textContent = "Nothing to save — leave a field blank to keep the key you already have.";
-    }
-    return;
-  }
   const res = await fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1999,8 +2035,9 @@ els.catalogForm?.addEventListener("submit", async (event) => {
     if (els.catalogStatus) els.catalogStatus.textContent = data.error || "Could not save.";
     return;
   }
+  applyMarketSettings(data);
   if (els.catalogStatus) {
-    const bits = [];
+    const bits = [`Using ${data.resolved?.currency || "local currency"}.`];
     if (payload.rawg_key) bits.push(data.rawg ? "RAWG saved." : "RAWG not saved.");
     if (payload.ebay_app_id) bits.push(data.ebay ? "eBay App ID saved." : "eBay App ID not saved.");
     els.catalogStatus.textContent = bits.join(" ");
@@ -2418,3 +2455,7 @@ try {
     els.views.collection.innerHTML = `<div class="empty">${escapeHtml(err.message || "The shelf failed to load. Refresh once.")}</div>`;
   }
 }
+fetch("/api/settings")
+  .then((res) => res.json())
+  .then(applyMarketSettings)
+  .catch(() => {});

@@ -1,6 +1,6 @@
 # Virtual shelf
 
-A local web app for a **physical video game collection**: games, wishlist, consoles, peripherals, covers, longplays, and wishlist checks on **FINN** and **eBay**. The virtual shelf is a dark grid with faux 3D cases. Your library stays in the browser (localStorage) — this repo ships **empty**.
+A local web app for a **physical video game collection**: games, wishlist, consoles, peripherals, covers, longplays, and wishlist checks on **local classifieds** (FINN, Blocket, Tori, DBA, and similar) plus **eBay**. Prices use your local currency. The virtual shelf is a dark grid with faux 3D cases. Your library stays in the browser (localStorage) — this repo ships **empty**.
 
 ## Run it
 
@@ -23,7 +23,15 @@ Do not use `http://localhost` if you already saved a shelf on `127.0.0.1` — th
 
 Wikipedia works without a key. For a proper games catalog, get a free key at [rawg.io/apidocs](https://rawg.io/apidocs), open **Catalog** in the app, and paste it.
 
-Wishlist **FINN / eBay** always gives search links. Listing prices on eBay work more reliably with a free Finding API App ID from [developer.ebay.com](https://developer.ebay.com/) — paste that in Catalog too. Keys stay in `config.json` (not committed). Leave a Catalog field blank to keep a key you already saved.
+Under Catalog, set **Country / currency** (or leave it on detect-from-browser). That switches shelf prices, the local classifieds site, and the eBay site:
+
+- Norway — FINN, NOK
+- Sweden — Blocket, SEK
+- Finland — Tori, EUR
+- Denmark — DBA, DKK
+- Also Germany (Kleinanzeigen), Netherlands (Marktplaats), France (Leboncoin), UK (Gumtree), and local eBay sites where they exist
+
+Wishlist market checks always give search links. Listing prices on eBay work more reliably with a free Finding API App ID from [developer.ebay.com](https://developer.ebay.com/). Keys stay in `config.json` (not committed). Leave a Catalog key field blank to keep a key you already saved.
 
 ## What is not in this repo
 

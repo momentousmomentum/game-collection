@@ -422,22 +422,40 @@ class Handler(SimpleHTTPRequestHandler):
             print(f"info error: {exc}", flush=True)
             self.json_response(502, {"error": "Could not load info.", "extract": "", "title": q, "url": "", "cover": None})
 
+    def settings_payload(self) -> dict:
+        from catalog import load_config, rawg_configured
+        from ebay import ebay_app_id
+        from markets import market_choices, normalize_locale, public_market, resolve_market
+
+        saved = normalize_locale(str(load_config().get("locale") or "auto"))
+        accept = self.headers.get("Accept-Language") or ""
+        market = resolve_market(saved, accept)
+        return {
+            "rawg": rawg_configured(),
+            "ebay": bool(ebay_app_id()),
+            "locale": saved,
+            "resolved": public_market(market),
+            "markets": market_choices(),
+        }
+
+    def request_locale(self, query: dict[str, list[str]] | None = None) -> tuple[str, str]:
+        from catalog import load_config
+        from markets import normalize_locale
+
+        accept = self.headers.get("Accept-Language") or ""
+        requested = ""
+        if query:
+            requested = (query.get("locale") or [""])[0].strip()
+        if not requested:
+            requested = str(load_config().get("locale") or "auto")
+        return normalize_locale(requested), accept
+
     def handle_settings_get(self) -> None:
-        rawg = False
-        ebay = False
         try:
-            from catalog import rawg_configured
-
-            rawg = rawg_configured()
-        except Exception:
-            rawg = False
-        try:
-            from ebay import ebay_app_id
-
-            ebay = bool(ebay_app_id())
-        except Exception:
-            ebay = False
-        self.json_response(200, {"rawg": rawg, "ebay": ebay})
+            self.json_response(200, self.settings_payload())
+        except Exception as exc:
+            print(f"settings error: {exc}", flush=True)
+            self.json_response(200, {"rawg": False, "ebay": False, "locale": "auto", "markets": []})
 
     def handle_settings_post(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
@@ -451,16 +469,19 @@ class Handler(SimpleHTTPRequestHandler):
             data["rawg_key"] = str(body.get("rawg_key") or "").strip()
         if "ebay_app_id" in body:
             data["ebay_app_id"] = str(body.get("ebay_app_id") or "").strip()
+        if "locale" in body:
+            from markets import normalize_locale
+
+            data["locale"] = normalize_locale(str(body.get("locale") or "auto"))
         try:
-            from catalog import save_config, rawg_configured
-            from ebay import ebay_app_id
+            from catalog import save_config
 
             if data:
                 save_config(data)
-            self.json_response(200, {"rawg": rawg_configured(), "ebay": bool(ebay_app_id())})
+            self.json_response(200, self.settings_payload())
         except OSError as exc:
             print(f"settings error: {exc}", flush=True)
-            self.json_response(500, {"error": "Could not save key."})
+            self.json_response(500, {"error": "Could not save settings."})
 
     def handle_backup_post(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
@@ -501,36 +522,32 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_finn(self, query: dict[str, list[str]]) -> None:
         q = (query.get("q") or [""])[0].strip()
         platform = (query.get("platform") or [""])[0].strip()
+        locale, accept = self.request_locale(query)
         if len(q) < 2:
             self.json_response(400, {"error": "Need a title.", "items": [], "searchUrl": ""})
             return
         try:
-            from finn import search_finn
+            from finn import search_classifieds
+            from markets import classifieds_search_url, resolve_market
         except Exception as exc:
-            print(f"finn import error: {exc}", flush=True)
-            self.json_response(
-                502,
-                {
-                    "error": "FINN checker unavailable.",
-                    "items": [],
-                    "searchUrl": "https://www.finn.no/recommerce/forsale/search?sub_category=1.93.3905",
-                },
-            )
+            print(f"classifieds import error: {exc}", flush=True)
+            self.json_response(502, {"error": "Classifieds checker unavailable.", "items": [], "searchUrl": ""})
             return
         try:
-            payload = search_finn(q, platform, limit=5)
+            payload = search_classifieds(q, platform, locale=locale, accept_language=accept, limit=5)
             self.json_response(200, payload)
         except Exception as exc:
-            print(f"finn error: {exc}", flush=True)
-            fallback = "https://www.finn.no/recommerce/forsale/search?" + urlencode(
-                {"q": q, "sub_category": "1.93.3905"}
-            )
-            self.json_response(502, {"error": "Could not reach FINN.", "items": [], "searchUrl": fallback})
+            print(f"classifieds error: {exc}", flush=True)
+            fallback = classifieds_search_url(resolve_market(locale, accept), q)
+            self.json_response(502, {"error": "Could not reach classifieds.", "items": [], "searchUrl": fallback})
 
     def handle_ebay(self, query: dict[str, list[str]]) -> None:
         q = (query.get("q") or [""])[0].strip()
         platform = (query.get("platform") or [""])[0].strip()
-        fallback = "https://www.ebay.com/sch/i.html?" + urlencode({"_nkw": q or "video games", "_sacat": "139973"})
+        locale, accept = self.request_locale(query)
+        from markets import ebay_search_url, resolve_market
+
+        fallback = ebay_search_url(resolve_market(locale, accept), q or "video games")
         if len(q) < 2:
             self.json_response(400, {"error": "Need a title.", "items": [], "searchUrl": fallback})
             return
@@ -541,7 +558,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response(502, {"error": "eBay checker unavailable.", "items": [], "searchUrl": fallback})
             return
         try:
-            payload = search_ebay(q, platform, limit=5)
+            payload = search_ebay(q, platform, locale=locale, accept_language=accept, limit=5)
             self.json_response(200, payload)
         except Exception as exc:
             print(f"ebay error: {exc}", flush=True)

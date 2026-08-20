@@ -8,18 +8,16 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from catalog import load_config
-from finn import PLATFORM_HINT
+from markets import ebay_search_url, public_market, query_with_platform, resolve_market
 
-SEARCH_BASE = "https://www.ebay.com/sch/i.html"
 FINDING_BASE = "https://svcs.ebay.com/services/search/FindingService/v1"
-GAMES_CATEGORY = "139973"
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 SSL_CTX = ssl.create_default_context()
 PRICE_RE = re.compile(
-    r"(?:USD|US\s*\$|\$|EUR|€|GBP|£)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)",
+    r"(?:USD|US\s*\$|AUD|CAD|CHF|DKK|EUR|GBP|NOK|PLN|SEK|\$|€|£|kr)\s*([0-9][0-9\s,]*(?:[.,][0-9]{1,2})?)",
     re.I,
 )
 
@@ -28,44 +26,53 @@ def ebay_app_id() -> str:
     return str(load_config().get("ebay_app_id") or "").strip()
 
 
-def search_url(query: str, rss: bool = False) -> str:
-    params = {"_nkw": query, "_sacat": GAMES_CATEGORY, "_sop": "15", "LH_BIN": "1"}
-    if rss:
-        params["_rss"] = "1"
-    return SEARCH_BASE + "?" + urlencode(params)
-
-
-def _fetch(url: str, accept: str) -> bytes:
+def _fetch(url: str, accept: str, lang: str) -> bytes:
     req = Request(
         url,
         headers={
             "User-Agent": BROWSER_UA,
             "Accept": accept,
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": lang or "en-US,en;q=0.9",
         },
     )
     with urlopen(req, timeout=14, context=SSL_CTX) as resp:
         return resp.read()
 
 
-def _parse_price(text: str) -> tuple[float | None, str]:
+def _parse_price(text: str, fallback: str) -> tuple[float | None, str]:
     match = PRICE_RE.search(text or "")
     if not match:
-        return None, ""
-    raw = match.group(0)
+        return None, fallback
+    raw = match.group(0).upper()
     try:
-        amount = float(match.group(1).replace(",", ""))
+        amount = float(match.group(1).replace(" ", "").replace(",", ""))
     except ValueError:
-        return None, ""
-    currency = "USD"
-    if "€" in raw or "EUR" in raw.upper():
+        return None, fallback
+    currency = fallback or "USD"
+    if "€" in match.group(0) or "EUR" in raw:
         currency = "EUR"
-    elif "£" in raw or "GBP" in raw.upper():
+    elif "£" in match.group(0) or "GBP" in raw:
         currency = "GBP"
+    elif "AUD" in raw:
+        currency = "AUD"
+    elif "CAD" in raw:
+        currency = "CAD"
+    elif "CHF" in raw:
+        currency = "CHF"
+    elif "DKK" in raw:
+        currency = "DKK"
+    elif "NOK" in raw:
+        currency = "NOK"
+    elif "SEK" in raw:
+        currency = "SEK"
+    elif "PLN" in raw:
+        currency = "PLN"
+    elif "USD" in raw or "$" in match.group(0):
+        currency = "USD"
     return amount, currency
 
 
-def _from_rss(xml_bytes: bytes, limit: int) -> list[dict]:
+def _from_rss(xml_bytes: bytes, limit: int, fallback: str) -> list[dict]:
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
@@ -77,31 +84,36 @@ def _from_rss(xml_bytes: bytes, limit: int) -> list[dict]:
         desc = html_lib.unescape(node.findtext("description") or "")
         if not title or not link:
             continue
-        price, currency = _parse_price(f"{title} {desc}")
-        items.append({"title": title, "url": link, "price": price, "currency": currency or "USD"})
+        price, currency = _parse_price(f"{title} {desc}", fallback)
+        items.append({"title": title, "url": link, "price": price, "currency": currency})
         if len(items) >= limit:
             break
     return items
 
 
-def _from_finding(query: str, limit: int) -> list[dict]:
+def _from_finding(query: str, market: dict, limit: int) -> list[dict]:
     app_id = ebay_app_id()
     if not app_id:
         return []
+    ebay = market["ebay"]
     params = {
         "OPERATION-NAME": "findItemsAdvanced",
         "SERVICE-VERSION": "1.13.0",
         "SECURITY-APPNAME": app_id,
+        "GLOBAL-ID": ebay["global_id"],
         "RESPONSE-DATA-FORMAT": "JSON",
         "REST-PAYLOAD": "true",
         "keywords": query,
-        "categoryId": GAMES_CATEGORY,
+        "categoryId": ebay.get("category") or "139973",
         "paginationInput.entriesPerPage": str(limit),
         "sortOrder": "PricePlusShippingLowest",
         "itemFilter(0).name": "ListingType",
         "itemFilter(0).value": "FixedPrice",
     }
-    payload = json.loads(_fetch(FINDING_BASE + "?" + urlencode(params), "application/json").decode("utf-8", "replace"))
+    lang = market.get("display") or "en"
+    payload = json.loads(
+        _fetch(FINDING_BASE + "?" + urlencode(params), "application/json", lang).decode("utf-8", "replace")
+    )
     ack = payload.get("findItemsAdvancedResponse") or []
     if not ack:
         return []
@@ -118,7 +130,7 @@ def _from_finding(query: str, limit: int) -> list[dict]:
             price = float(raw) if raw is not None else None
         except (TypeError, ValueError):
             price = None
-        currency = price_node.get("@currencyId") or "USD"
+        currency = price_node.get("@currencyId") or ebay.get("currency") or "USD"
         if title and link:
             items.append({"title": title, "url": link, "price": price, "currency": currency})
         if len(items) >= limit:
@@ -126,20 +138,26 @@ def _from_finding(query: str, limit: int) -> list[dict]:
     return items
 
 
-def search_ebay(query: str, platform: str, limit: int = 5) -> dict:
-    hint = PLATFORM_HINT.get(platform, "")
-    q = " ".join(part for part in (query, hint) if part).strip()
-    html_url = search_url(q)
+def search_ebay(query: str, platform: str, locale: str = "auto", accept_language: str = "", limit: int = 5) -> dict:
+    market = resolve_market(locale, accept_language)
+    q = query_with_platform(query, platform)
+    html_url = ebay_search_url(market, q)
+    lang = market.get("display") or "en"
+    fallback_currency = market["ebay"]["currency"]
     items = []
     try:
-        items = _from_finding(q, limit)
+        items = _from_finding(q, market, limit)
     except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, KeyError, IndexError) as exc:
         print(f"ebay finding: {exc}", flush=True)
         items = []
     blocked = False
     if not items:
         try:
-            items = _from_rss(_fetch(search_url(q, rss=True), "application/rss+xml,application/xml,text/xml,*/*"), limit)
+            items = _from_rss(
+                _fetch(ebay_search_url(market, q, rss=True), "application/rss+xml,application/xml,text/xml,*/*", lang),
+                limit,
+                fallback_currency,
+            )
         except HTTPError as exc:
             blocked = exc.code in {403, 429}
             items = []
@@ -153,4 +171,10 @@ def search_ebay(query: str, platform: str, limit: int = 5) -> dict:
             error = "eBay blocked anonymous search. Add a free App ID under Catalog, or open the search link."
         else:
             error = "No listings found. Open eBay, or add an App ID under Catalog if search stays empty."
-    return {"query": q, "searchUrl": html_url, "items": items, "error": error}
+    return {
+        "query": q,
+        "searchUrl": html_url,
+        "items": items,
+        "error": error,
+        "market": public_market(market),
+    }

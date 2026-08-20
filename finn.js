@@ -3,6 +3,12 @@ const view = document.getElementById("view-finn");
 
 let scanning = false;
 let rows = [];
+let market = {
+  currency: "USD",
+  display: "en",
+  classifieds: null,
+  ebay: { name: "eBay", host: "www.ebay.com", currency: "USD" },
+};
 
 function escapeHtml(value) {
   return String(value)
@@ -34,33 +40,40 @@ function wishlistGames() {
     }));
 }
 
-function formatNok(value) {
-  if (value == null || Number.isNaN(value)) return "";
-  return `${Math.round(value)} kr`;
-}
-
 function formatMoney(value, currency) {
   if (value == null || Number.isNaN(Number(value))) return "";
-  const amount = Number(value);
-  if (currency === "NOK") return formatNok(amount);
+  const code = currency || market.currency || "USD";
   try {
-    return new Intl.NumberFormat("en", { style: "currency", currency: currency || "USD", maximumFractionDigits: 2 }).format(amount);
+    return new Intl.NumberFormat(market.display || undefined, {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: 2,
+    }).format(Number(value));
   } catch {
-    return `${amount} ${currency || ""}`.trim();
+    return `${Number(value)} ${code}`.trim();
   }
 }
 
-function defaultFinnUrl(game) {
+function classifiedsName(row) {
+  return row?.classifieds?.market?.classifieds?.name || market.classifieds?.name || "Classifieds";
+}
+
+function defaultClassifiedsUrl(game) {
   const q = [game.title, game.consoleName].filter(Boolean).join(" ");
-  return `https://www.finn.no/recommerce/forsale/search?${new URLSearchParams({
-    q,
-    sub_category: "1.93.3905",
-  })}`;
+  const site = market.classifieds;
+  if (!site) return "";
+  const id = site.id;
+  if (id === "finn" || id === "blocket" || id === "tori" || id === "dba") {
+    const host = { finn: "www.finn.no", blocket: "www.blocket.se", tori: "www.tori.fi", dba: "www.dba.dk" }[id];
+    return `https://${host}/recommerce/forsale/search?${new URLSearchParams({ q, sub_category: "1.93.3905" })}`;
+  }
+  return "";
 }
 
 function defaultEbayUrl(game) {
   const q = [game.title, game.consoleName].filter(Boolean).join(" ");
-  return `https://www.ebay.com/sch/i.html?${new URLSearchParams({
+  const host = market.ebay?.host || "www.ebay.com";
+  return `https://${host}/sch/i.html?${new URLSearchParams({
     _nkw: q,
     _sacat: "139973",
     _sop: "15",
@@ -68,25 +81,38 @@ function defaultEbayUrl(game) {
   })}`;
 }
 
-function marketBlock(game, row, market) {
-  const label = market === "ebay" ? "eBay" : "FINN";
-  const fallback = market === "ebay" ? defaultEbayUrl(game) : defaultFinnUrl(game);
-  const data = row?.[market];
+function marketBlock(game, row, kind) {
+  const isEbay = kind === "ebay";
+  const label = isEbay ? "eBay" : classifiedsName(row);
+  const fallback = isEbay ? defaultEbayUrl(game) : defaultClassifiedsUrl(game);
+  const data = isEbay ? row?.ebay : row?.classifieds;
+  if (!isEbay && !market.classifieds && !data) {
+    return `<p class="meta">No local classifieds site for this country.</p>`;
+  }
   if (!data) {
     return scanning
       ? `<p class="meta">${escapeHtml(label)}: looking…</p>`
-      : `<a class="ghost finn-link" href="${escapeHtml(fallback)}" target="_blank" rel="noopener">Search on ${escapeHtml(label)}</a>`;
+      : fallback
+        ? `<a class="ghost finn-link" href="${escapeHtml(fallback)}" target="_blank" rel="noopener">Search on ${escapeHtml(label)}</a>`
+        : `<p class="meta">${escapeHtml(label)}: no search link.</p>`;
   }
   const listings = (data.items || [])
     .filter((item) => item.url)
     .slice()
     .sort((a, b) => (a.price ?? 1e12) - (b.price ?? 1e12));
-  const compareNok = market === "finn" && row.maxPrice;
+  const localCurrency = market.currency;
+  const compare =
+    !isEbay &&
+    row.maxPrice &&
+    listings.some((item) => item.currency === localCurrency || !item.currency);
   const underNote =
-    compareNok && listings.some((item) => item.price != null && item.price <= row.maxPrice)
-      ? `<p class="meta">At or under your ${escapeHtml(formatNok(row.maxPrice))} target on FINN.</p>`
+    compare && listings.some((item) => item.price != null && item.price <= row.maxPrice && (item.currency === localCurrency || !item.currency))
+      ? `<p class="meta">At or under your ${escapeHtml(formatMoney(row.maxPrice, localCurrency))} target on ${escapeHtml(label)}.</p>`
       : "";
   if (!listings.length) {
+    if (!fallback && !data.searchUrl) {
+      return `<p class="meta">${escapeHtml(label)}: ${escapeHtml(data.error || "No listings found.")}</p>`;
+    }
     return `
       <p class="meta">${escapeHtml(label)}: ${escapeHtml(data.error || "No listings found.")}</p>
       <a class="ghost finn-link" href="${escapeHtml(data.searchUrl || fallback)}" target="_blank" rel="noopener">Search on ${escapeHtml(label)}</a>`;
@@ -96,8 +122,15 @@ function marketBlock(game, row, market) {
     <div class="finn-deals">
       ${listings
         .map((item) => {
-          const price = formatMoney(item.price, item.currency || (market === "finn" ? "NOK" : "USD")) || "See listing";
-          const under = compareNok && item.price != null && item.price <= row.maxPrice ? " under-target" : "";
+          const price = formatMoney(item.price, item.currency || (isEbay ? market.ebay?.currency : localCurrency)) || "See listing";
+          const under =
+            !isEbay &&
+            row.maxPrice &&
+            item.price != null &&
+            item.price <= row.maxPrice &&
+            (item.currency === localCurrency || !item.currency)
+              ? " under-target"
+              : "";
           return `
             <a class="finn-deal${under}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">
               <strong>${escapeHtml(price)}</strong>
@@ -112,9 +145,13 @@ function marketBlock(game, row, market) {
 function renderFinn() {
   if (!view) return;
   const wish = wishlistGames();
+  const localName = market.classifieds?.name;
+  const intro = localName
+    ? `Checks ${localName} and eBay for titles on your wishlist, in ${market.currency}. Collection stays untouched. eBay listings need an App ID under Catalog if eBay blocks anonymous search. Pick your country under Catalog.`
+    : `Checks eBay for titles on your wishlist, in ${market.currency}. There is no FINN-style classifieds site for this country. Pick your country under Catalog.`;
   view.innerHTML = `
     <div class="deals-head">
-      <p class="meta">Checks FINN Torget and eBay for titles on your wishlist. Collection stays untouched. eBay listings need an App ID under Catalog if eBay blocks anonymous search.</p>
+      <p class="meta">${escapeHtml(intro)}</p>
       <button class="primary" id="finn-scan-btn" ${scanning || !wish.length ? "disabled" : ""}>
         ${scanning ? "Checking markets…" : "Check wishlist"}
       </button>
@@ -125,12 +162,16 @@ function renderFinn() {
         : `<div class="finn-list">${wish
             .map((game) => {
               const row = rows.find((r) => r.id === game.id);
+              const name = classifiedsName(row);
               return `
                 <article class="finn-row">
                   <h3>${escapeHtml(game.title)}</h3>
-                  <p class="meta">${escapeHtml(game.consoleName)}${game.maxPrice ? ` · FINN target ${escapeHtml(formatNok(game.maxPrice))}` : ""}</p>
-                  <p class="market-label">FINN</p>
-                  ${marketBlock(game, row, "finn")}
+                  <p class="meta">${escapeHtml(game.consoleName)}${game.maxPrice ? ` · target ${escapeHtml(formatMoney(game.maxPrice, market.currency))}` : ""}</p>
+                  ${
+                    market.classifieds
+                      ? `<p class="market-label">${escapeHtml(name)}</p>${marketBlock(game, row, "classifieds")}`
+                      : ""
+                  }
                   <p class="market-label">eBay</p>
                   ${marketBlock(game, row, "ebay")}
                 </article>`;
@@ -140,7 +181,7 @@ function renderFinn() {
 }
 
 async function fetchMarket(path, game) {
-  const params = new URLSearchParams({ q: game.title, platform: game.consoleId || "" });
+  const params = new URLSearchParams({ q: game.title, platform: game.consoleId || "", locale: market.id || "auto" });
   try {
     const res = await fetch(`${path}?${params}`);
     return await res.json();
@@ -150,8 +191,8 @@ async function fetchMarket(path, game) {
 }
 
 async function checkOne(game) {
-  const [finn, ebay] = await Promise.all([fetchMarket("/api/finn", game), fetchMarket("/api/ebay", game)]);
-  return { id: game.id, maxPrice: game.maxPrice, finn, ebay };
+  const [classifieds, ebay] = await Promise.all([fetchMarket("/api/finn", game), fetchMarket("/api/ebay", game)]);
+  return { id: game.id, maxPrice: game.maxPrice, classifieds, ebay };
 }
 
 async function scanWishlist() {
@@ -169,8 +210,23 @@ async function scanWishlist() {
   renderFinn();
 }
 
+async function loadMarket() {
+  try {
+    const data = await (await fetch("/api/settings")).json();
+    if (data.resolved) market = data.resolved;
+  } catch {
+    /* keep last known market */
+  }
+  renderFinn();
+}
+
 document.addEventListener("shelf:view", (event) => {
   if (event.detail !== "finn") return;
+  loadMarket();
+});
+
+document.addEventListener("shelf:market", (event) => {
+  if (event.detail) market = event.detail;
   renderFinn();
 });
 
