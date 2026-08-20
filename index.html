@@ -23,10 +23,12 @@
           </div>
         </div>
         <nav class="nav">
-          <button type="button" data-view="collection" class="active">Collection</button>
-          <button type="button" data-view="wishlist">Wishlist</button>
+          <button type="button" data-view="collection" class="active">Games collection</button>
+          <button type="button" data-view="wishlist">Games wishlist</button>
+          <button type="button" data-view="sold">Sold / traded</button>
           <button type="button" data-view="finn">FINN</button>
-          <button type="button" data-view="consoles">Consoles</button>
+          <button type="button" data-view="consoles">Console Collection</button>
+          <button type="button" data-view="peripherals">Peripherals collection</button>
           <button type="button" id="catalog-btn">Catalog</button>
         </nav>
         <div class="rail-foot">
@@ -42,19 +44,22 @@
         <header class="top">
           <div>
             <p class="eyebrow" id="eyebrow">Your copies</p>
-            <h1 id="page-title">Collection</h1>
+            <h1 id="page-title">Games collection</h1>
           </div>
           <div class="top-actions">
-            <input id="search" type="search" placeholder="Search titles…" />
+            <input id="search" type="search" placeholder="Search games, consoles, peripherals…" />
             <button id="fill-covers-btn" class="ghost">Fetch covers</button>
             <button id="add-btn" class="primary">Add game</button>
           </div>
         </header>
+        <div id="global-search" class="global-search hidden"></div>
 
         <section id="view-collection" class="view"></section>
         <section id="view-wishlist" class="view hidden"></section>
+        <section id="view-sold" class="view hidden"></section>
         <section id="view-finn" class="view hidden"></section>
         <section id="view-consoles" class="view hidden"></section>
+        <section id="view-peripherals" class="view hidden"></section>
       </main>
     </div>
 
@@ -89,8 +94,20 @@
             <select name="status">
               <option value="owned">Owned</option>
               <option value="wishlist">Wishlist</option>
+              <option value="sold">Sold / traded</option>
             </select>
           </label>
+          <label>
+            Region
+            <select name="region">
+              <option value="">—</option>
+              <option value="pal">PAL</option>
+              <option value="ntsc-u">NTSC-U</option>
+              <option value="ntsc-j">NTSC-J</option>
+            </select>
+          </label>
+        </fieldset>
+        <fieldset class="row">
           <label>
             Condition
             <select name="condition">
@@ -102,13 +119,29 @@
             </select>
           </label>
         </fieldset>
+        <fieldset class="kit">
+          <legend>In the box</legend>
+          <label class="check"><input type="checkbox" name="hasBox" /> Box</label>
+          <label class="check"><input type="checkbox" name="hasManual" /> Manual</label>
+          <label class="check"><input type="checkbox" name="hasInserts" /> Inserts</label>
+        </fieldset>
+        <fieldset class="row">
+          <label class="wishlist-only">
+            Target price (wishlist)
+            <input name="maxPrice" type="number" min="0" step="0.01" placeholder="Optional" />
+          </label>
+          <label class="owned-only">
+            Price paid
+            <input name="paidPrice" type="number" min="0" step="0.01" placeholder="Optional" />
+          </label>
+        </fieldset>
         <label>
-          Target price (wishlist)
-          <input name="maxPrice" type="number" min="0" step="0.01" placeholder="Optional" />
+          Location
+          <input name="location" maxlength="80" placeholder="Kallax bay, box, shelf…" />
         </label>
         <label>
           Notes
-          <textarea name="notes" rows="3" maxlength="400" placeholder="Variant, region, missing manual…"></textarea>
+          <textarea name="notes" rows="3" maxlength="400" placeholder="Variant, missing insert, smell, serial…"></textarea>
         </label>
         <menu>
           <button value="cancel" type="button" id="dialog-cancel" class="ghost">Cancel</button>
@@ -127,6 +160,7 @@
           </div>
         </header>
         <section class="detail-about" id="detail-about"></section>
+        <section id="detail-longplay" class="detail-longplay hidden"></section>
         <section id="detail-copies"></section>
         <menu>
           <button type="button" id="detail-edit" class="ghost hidden">Edit</button>
@@ -151,6 +185,21 @@
       </form>
     </dialog>
 
+    <dialog id="peripheral-dialog">
+      <h2 id="peripheral-dialog-title">Add a peripheral</h2>
+      <p class="meta" id="peripheral-dialog-sub">Pick a console, then add official hardware from the list.</p>
+      <div id="peripheral-console-grid" class="console-grid"></div>
+      <div id="peripheral-official-list" class="official-list hidden"></div>
+      <form id="peripheral-custom-form" class="add-console hidden">
+        <input name="title" maxlength="160" placeholder="Not listed? Type a name" />
+        <button class="primary" type="submit">Add custom</button>
+      </form>
+      <menu>
+        <button type="button" id="peripheral-back" class="ghost hidden">Back</button>
+        <button type="button" id="peripheral-cancel" class="ghost">Close</button>
+      </menu>
+    </dialog>
+
     <dialog id="got-it-dialog">
       <form id="got-it-form">
         <p class="eyebrow">Off the wishlist</p>
@@ -165,6 +214,29 @@
           <button type="button" class="chip" data-condition="loose">Loose</button>
           <button type="button" class="chip" data-condition="digital">Digital</button>
         </div>
+        <label>
+          Region
+          <select name="region">
+            <option value="">—</option>
+            <option value="pal">PAL</option>
+            <option value="ntsc-u">NTSC-U</option>
+            <option value="ntsc-j">NTSC-J</option>
+          </select>
+        </label>
+        <fieldset class="kit">
+          <legend>In the box</legend>
+          <label class="check"><input type="checkbox" name="hasBox" checked /> Box</label>
+          <label class="check"><input type="checkbox" name="hasManual" checked /> Manual</label>
+          <label class="check"><input type="checkbox" name="hasInserts" checked /> Inserts</label>
+        </fieldset>
+        <label>
+          Price paid
+          <input name="paidPrice" type="number" min="0" step="0.01" placeholder="Optional" />
+        </label>
+        <label>
+          Location
+          <input name="location" maxlength="80" placeholder="Kallax bay, box, shelf…" />
+        </label>
         <menu>
           <button type="button" id="got-it-cancel" class="ghost">Not yet</button>
           <button class="primary">Add to shelf</button>
@@ -173,6 +245,10 @@
     </dialog>
 
     <div id="fireworks" class="fireworks hidden" aria-hidden="true"></div>
+    <div id="undo-toast" class="undo-toast hidden">
+      <span id="undo-text">Removed</span>
+      <button type="button" id="undo-btn">Undo</button>
+    </div>
     <script type="module" src="/app.js"></script>
     <script type="module" src="/finn.js"></script>
   </body>

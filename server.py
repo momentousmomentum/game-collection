@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from paths import resource_dir
+from paths import resource_dir, portable_dir
 
 ROOT = resource_dir()
 PORT = 5173
@@ -123,7 +123,8 @@ def wiki_search(terms: str) -> list[dict]:
 
 def search_wikipedia(query: str, platform: str) -> list[dict]:
     hint = PLATFORM_HINT.get(platform, "")
-    results = wiki_search(query if not hint else f"{query} {hint}")
+    terms = f"{query} {hint}".strip() if hint else f"{query} video game"
+    results = wiki_search(terms)
     if not results:
         results = wiki_search(f"{query} video game")
     return results
@@ -164,6 +165,32 @@ def pick_cover(items: list[dict], title: str) -> str | None:
     return best if best_score >= 50 else None
 
 
+def find_peripheral_cover(query: str, platform: str) -> dict:
+    hint = PLATFORM_HINT.get(platform, "")
+    attempts = []
+    if hint:
+        attempts.append(f"{hint} {query}")
+    attempts.append(query)
+    attempts.append(f"{query} controller")
+    seen: set[str] = set()
+    all_items: list[dict] = []
+    for term in attempts:
+        key = term.strip().lower()
+        if not term.strip() or key in seen:
+            continue
+        seen.add(key)
+        try:
+            items = wiki_search(term)
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError):
+            continue
+        all_items.extend(items)
+        cover = pick_cover(items, query)
+        if cover:
+            return {"cover": cover, "source": "wikipedia"}
+    fallback = next((item.get("cover") for item in all_items if item.get("cover")), None)
+    return {"cover": fallback, "source": "fallback" if fallback else ""}
+
+
 def find_cover(query: str, platform: str) -> dict:
     from catalog import search_rawg
 
@@ -201,7 +228,13 @@ def wikipedia_info(query: str, platform: str, kind: str) -> dict:
             "cover": thumb or fallback_cover,
         }
 
-    titles = [PLATFORM_HINT.get(platform, "") or query, query] if kind == "console" else [query]
+    if kind == "console":
+        titles = [PLATFORM_HINT.get(platform, "") or query, query]
+    elif kind == "peripheral":
+        hint = PLATFORM_HINT.get(platform, "")
+        titles = [query, f"{hint} {query}".strip() if hint else query]
+    else:
+        titles = [query]
     seen: set[str] = set()
     for title in titles:
         if not title or title in seen:
@@ -219,6 +252,9 @@ def wikipedia_info(query: str, platform: str, kind: str) -> dict:
         if kind == "console":
             hint = PLATFORM_HINT.get(platform, "") or query
             items = wiki_search(f"{hint} video game console") or wiki_search(hint)
+        elif kind == "peripheral":
+            hint = PLATFORM_HINT.get(platform, "")
+            items = wiki_search(f"{query} {hint}".strip()) or wiki_search(query)
         else:
             items = search_wikipedia(query, platform)
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
@@ -260,6 +296,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/info":
             self.handle_info(parse_qs(parsed.query))
             return
+        if parsed.path == "/api/longplay":
+            self.handle_longplay(parse_qs(parsed.query))
+            return
         if parsed.path == "/api/settings":
             self.handle_settings_get()
             return
@@ -296,10 +335,14 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_cover(self, query: dict[str, list[str]]) -> None:
         q = (query.get("q") or [""])[0].strip()
         platform = (query.get("platform") or [""])[0].strip()
+        kind = (query.get("kind") or ["game"])[0].strip() or "game"
         if len(q) < 2:
             self.json_response(400, {"cover": None, "error": "Need a title."})
             return
         try:
+            if kind == "peripheral":
+                self.json_response(200, find_peripheral_cover(q, platform))
+                return
             self.json_response(200, find_cover(q, platform))
         except Exception as exc:
             print(f"cover error: {exc}", flush=True)
@@ -317,6 +360,21 @@ class Handler(SimpleHTTPRequestHandler):
             print(f"rawg search error: {exc}", flush=True)
         return search_wikipedia(q, platform), "wikipedia"
 
+    def handle_longplay(self, query: dict[str, list[str]]) -> None:
+        q = (query.get("q") or [""])[0].strip()
+        platform = (query.get("platform") or [""])[0].strip()
+        if len(q) < 2:
+            self.json_response(200, {"videoId": None})
+            return
+        try:
+            from longplay import find_longplay
+
+            hit = find_longplay(q, PLATFORM_HINT.get(platform, ""))
+            self.json_response(200, hit or {"videoId": None})
+        except Exception as exc:
+            print(f"longplay error: {exc}", flush=True)
+            self.json_response(200, {"videoId": None})
+
     def handle_info(self, query: dict[str, list[str]]) -> None:
         q = (query.get("q") or [""])[0].strip()
         platform = (query.get("platform") or [""])[0].strip()
@@ -331,17 +389,31 @@ class Handler(SimpleHTTPRequestHandler):
                 payload["source"] = "wikipedia"
                 self.json_response(200, payload)
                 return
+            if kind == "peripheral":
+                payload = wikipedia_info(q, platform, "peripheral")
+                payload["source"] = "wikipedia"
+                self.json_response(200, payload)
+                return
             try:
                 from catalog import rawg_info
 
                 info = rawg_info(q, platform, slug)
-                if info and info.get("extract"):
+                if info and (info.get("extract") or info.get("released") or info.get("genres")):
                     self.json_response(200, info)
                     return
             except Exception as exc:
                 print(f"rawg info error: {exc}", flush=True)
             payload = wikipedia_info(q, platform, "game")
             payload["source"] = "wikipedia"
+            try:
+                from catalog import search_rawg
+
+                hits = search_rawg(q, platform)
+                if hits:
+                    payload.setdefault("released", hits[0].get("released") or "")
+                    payload.setdefault("genres", hits[0].get("genres") or [])
+            except Exception as exc:
+                print(f"rawg meta error: {exc}", flush=True)
             self.json_response(200, payload)
         except Exception as exc:
             print(f"info error: {exc}", flush=True)
@@ -372,10 +444,39 @@ class Handler(SimpleHTTPRequestHandler):
             print(f"settings error: {exc}", flush=True)
             self.json_response(500, {"error": "Could not save key."})
 
+    def handle_backup_post(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 8_000_000:
+            self.json_response(413, {"error": "Backup too large."})
+            return
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            self.json_response(400, {"error": "Bad JSON."})
+            return
+        if not isinstance(body, dict):
+            self.json_response(400, {"error": "Bad backup."})
+            return
+        try:
+            folder = portable_dir() / "userdata"
+            folder.mkdir(exist_ok=True)
+            dest = folder / "shelf-backup.json"
+            prev = folder / "shelf-backup-prev.json"
+            if dest.exists():
+                dest.replace(prev)
+            dest.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+            self.json_response(200, {"ok": True, "path": str(dest)})
+        except OSError as exc:
+            print(f"backup error: {exc}", flush=True)
+            self.json_response(500, {"error": "Could not write backup."})
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/settings":
             self.handle_settings_post()
+            return
+        if parsed.path == "/api/backup":
+            self.handle_backup_post()
             return
         self.send_error(404, "Not found")
 

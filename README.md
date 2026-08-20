@@ -1,6 +1,6 @@
 # Virtual shelf
 
-A local web app for a **physical video game collection**: copies, wishlist, consoles, covers, and FINN checks. The shelf is a black Kallax-style grid with 3D cases. Your library stays in the browser (localStorage) — this repo ships **empty**.
+A local web app for a **physical video game collection**: games, wishlist, consoles, peripherals, covers, longplays, and FINN checks. The shelf is a black Kallax-style grid with 3D cases. Your library stays in the browser (localStorage) — this repo ships **empty**.
 
 ## Run it
 
@@ -26,7 +26,8 @@ Wikipedia works without a key. For a proper games catalog, get a free key at [ra
 ## What is not in this repo
 
 - Nobody else’s (or your) game list
-- RAWG API keys
+- RAWG API keys (`config.json`)
+- Local backups (`userdata/`)
 - Built Windows/macOS/Linux binaries (`dist/`)
 
 Export/Import in the sidebar if you want to move a shelf between browsers.

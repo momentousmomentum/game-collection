@@ -94,18 +94,26 @@ def _clip(text: str, limit: int = 720) -> str:
 
 
 def _hit(game: dict) -> dict:
-    released = (game.get("released") or "")[:4]
+    released = (game.get("released") or "")[:10]
+    genres = [
+        g.get("name")
+        for g in (game.get("genres") or [])
+        if isinstance(g, dict) and g.get("name")
+    ]
     platforms = [
         (p.get("platform") or {}).get("name")
         for p in (game.get("platforms") or [])[:3]
         if (p.get("platform") or {}).get("name")
     ]
-    subtitle = " · ".join(part for part in (released, ", ".join(platforms)) if part)
+    year = released[:4]
+    subtitle = " · ".join(part for part in (year, ", ".join(platforms)) if part)
     return {
         "title": game.get("name") or "",
         "subtitle": subtitle,
         "cover": game.get("background_image"),
         "slug": game.get("slug") or "",
+        "released": released,
+        "genres": genres,
     }
 
 
@@ -157,4 +165,10 @@ def rawg_info(query: str, platform: str, slug: str = "") -> dict | None:
         "cover": game.get("background_image"),
         "source": "rawg",
         "slug": game.get("slug") or "",
+        "released": (game.get("released") or "")[:10],
+        "genres": [
+            g.get("name")
+            for g in (game.get("genres") or [])
+            if isinstance(g, dict) and g.get("name")
+        ],
     }

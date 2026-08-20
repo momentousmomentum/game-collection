@@ -1,4 +1,5 @@
 import { consoleLogo } from "./logos.js";
+import { officialFor } from "./peripherals.js";
 
 const STORAGE_KEY = "game-shelf-v1";
 const COVER_DB = "game-shelf-covers";
@@ -108,18 +109,22 @@ const CONSOLE_REVISIONS = {
 };
 
 const copy = {
-  collection: { title: "Collection", eyebrow: "Your copies" },
-  wishlist: { title: "Wishlist", eyebrow: "Still hunting" },
+  collection: { title: "Games collection", eyebrow: "Your copies" },
+  wishlist: { title: "Games wishlist", eyebrow: "Still hunting" },
+  sold: { title: "Sold / traded", eyebrow: "No longer on the shelf" },
   finn: { title: "FINN", eyebrow: "Wishlist on Torget" },
-  consoles: { title: "Consoles", eyebrow: "What you own" },
+  consoles: { title: "Console Collection", eyebrow: "What you own" },
+  peripherals: { title: "Peripherals collection", eyebrow: "Pads, cameras, multitaps" },
 };
 
 const els = {
   views: {
     collection: document.getElementById("view-collection"),
     wishlist: document.getElementById("view-wishlist"),
+    sold: document.getElementById("view-sold"),
     finn: document.getElementById("view-finn"),
     consoles: document.getElementById("view-consoles"),
+    peripherals: document.getElementById("view-peripherals"),
   },
   nav: document.querySelectorAll(".nav button"),
   title: document.getElementById("page-title"),
@@ -148,6 +153,7 @@ const els = {
   detailTitle: document.getElementById("detail-title"),
   detailSub: document.getElementById("detail-sub"),
   detailAbout: document.getElementById("detail-about"),
+  detailLongplay: document.getElementById("detail-longplay"),
   detailCopies: document.getElementById("detail-copies"),
   detailEdit: document.getElementById("detail-edit"),
   detailClose: document.getElementById("detail-close"),
@@ -157,18 +163,42 @@ const els = {
   gotItCancel: document.getElementById("got-it-cancel"),
   gotItConditions: document.getElementById("got-it-conditions"),
   fireworks: document.getElementById("fireworks"),
+  peripheralDialog: document.getElementById("peripheral-dialog"),
+  peripheralTitle: document.getElementById("peripheral-dialog-title"),
+  peripheralSub: document.getElementById("peripheral-dialog-sub"),
+  peripheralGrid: document.getElementById("peripheral-console-grid"),
+  peripheralList: document.getElementById("peripheral-official-list"),
+  peripheralCustom: document.getElementById("peripheral-custom-form"),
+  peripheralBack: document.getElementById("peripheral-back"),
+  peripheralCancel: document.getElementById("peripheral-cancel"),
+  globalSearch: document.getElementById("global-search"),
+  undoToast: document.getElementById("undo-toast"),
+  undoText: document.getElementById("undo-text"),
+  undoBtn: document.getElementById("undo-btn"),
 };
 
-let state = { games: [], consoles: [] };
+let state = { games: [], consoles: [], peripherals: [] };
 let view = "collection";
 let consoleFilter = "all";
+let gameSort = { collection: "added", wishlist: "added", sold: "added" };
+let sortReverse = { collection: false, wishlist: false, sold: false };
+let extraFilter = { condition: "all", genre: "all", cover: "all" };
+let peripheralStatus = "owned";
 let editingId = null;
+let itemKind = "game";
+let peripheralConsoleId = "";
 let pendingCover = null;
+let pendingMeta = { released: "", genres: [] };
 let searchTimer = 0;
 const objectUrls = new Map();
 const infoCache = new Map();
+const longplayCache = new Map();
 let detail = { kind: null, id: null };
 let pendingOwnId = null;
+let pendingOwnKind = "game";
+let undoAction = null;
+let undoTimer = 0;
+let backupTimer = 0;
 
 function uid() {
   return crypto.randomUUID();
@@ -182,25 +212,52 @@ function consoleCopies(con) {
   return Array.isArray(con?.copies) ? con.copies : [];
 }
 
+function inferredKit(condition) {
+  const full = condition === "sealed" || condition === "cib";
+  return { box: full, manual: full, inserts: full };
+}
+
+function migrateCopyItem(c = {}, fallback = {}) {
+  const condition = c.condition || fallback.condition || "";
+  const kit = inferredKit(condition);
+  const paid = c.paidPrice ?? fallback.paidPrice;
+  return {
+    id: c.id || uid(),
+    condition,
+    notes: c.notes || "",
+    region: c.region || fallback.region || "",
+    box: typeof c.box === "boolean" ? c.box : kit.box,
+    manual: typeof c.manual === "boolean" ? c.manual : kit.manual,
+    inserts: typeof c.inserts === "boolean" ? c.inserts : kit.inserts,
+    paidPrice: paid === "" || paid == null || Number.isNaN(Number(paid)) ? null : Number(paid),
+    location: c.location || fallback.location || "",
+  };
+}
+
 function migrateGame(game) {
+  const meta = {
+    released: game.released || "",
+    genres: Array.isArray(game.genres) ? game.genres.filter(Boolean) : [],
+    region: game.region || "",
+    location: game.location || "",
+    paidPrice: game.paidPrice == null || game.paidPrice === "" ? null : Number(game.paidPrice),
+    box: typeof game.box === "boolean" ? game.box : inferredKit(game.condition).box,
+    manual: typeof game.manual === "boolean" ? game.manual : inferredKit(game.condition).manual,
+    inserts: typeof game.inserts === "boolean" ? game.inserts : inferredKit(game.condition).inserts,
+  };
   const copies = gameCopies(game);
   if (copies.length) {
-    return {
-      ...game,
-      copies: copies.map((c) => ({
-        id: c.id || uid(),
-        condition: c.condition || "",
-        notes: c.notes || "",
-      })),
-    };
+    return { ...game, ...meta, copies: copies.map((c) => migrateCopyItem(c, meta)) };
   }
-  if (game.status === "owned") {
-    return {
-      ...game,
-      copies: [{ id: uid(), condition: game.condition || "", notes: "" }],
-    };
+  if (game.status === "owned" || game.status === "sold") {
+    return { ...game, ...meta, copies: [migrateCopyItem({ condition: game.condition || "" }, meta)] };
   }
-  return { ...game, copies: [] };
+  return { ...game, ...meta, copies: [] };
+}
+
+function migratePeripheral(item) {
+  const next = migrateGame({ ...item, status: item.status || "owned" });
+  return next;
 }
 
 function migrateConsole(con) {
@@ -212,12 +269,12 @@ function migrateConsole(con) {
   if (!copies.length && con.owned) {
     copies = [{ id: uid(), revision: con.revision || "", notes: "" }];
   }
-  return { ...con, copies, owned: copies.length > 0 };
+  return { ...con, copies, owned: copies.length > 0, wanted: copies.length ? false : Boolean(con.wanted) };
 }
 
 function syncConsoleOwned(con) {
   const copies = consoleCopies(con);
-  return { ...con, copies, owned: copies.length > 0 };
+  return { ...con, copies, owned: copies.length > 0, wanted: copies.length ? false : Boolean(con.wanted) };
 }
 
 function load() {
@@ -250,6 +307,7 @@ function load() {
   return {
     games: (base.games || []).map(migrateGame),
     consoles: consoles.map(migrateConsole),
+    peripherals: (base.peripherals || []).map(migratePeripheral),
   };
 }
 
@@ -266,12 +324,18 @@ function save() {
   if (!state.games.length) {
     try {
       const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-      if (existing?.games?.length) return;
+      if (existing?.games?.length) {
+        existing.peripherals = state.peripherals;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
+        scheduleBackup();
+        return;
+      }
     } catch {
       /* ignore */
     }
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  scheduleBackup();
 }
 
 function ownedConsoles() {
@@ -295,6 +359,70 @@ function formatSheetDate(value) {
 function conditionLabel(value) {
   const labels = { sealed: "Sealed", cib: "CIB", loose: "Loose", digital: "Digital" };
   return labels[value] || value || "";
+}
+
+function regionLabel(value) {
+  const labels = { pal: "PAL", "ntsc-u": "NTSC-U", "ntsc-j": "NTSC-J" };
+  return labels[value] || "";
+}
+
+function kitLabel(item) {
+  const bits = [item?.box && "Box", item?.manual && "Manual", item?.inserts && "Inserts"].filter(Boolean);
+  return bits.join(" · ");
+}
+
+function money(value) {
+  if (value == null || value === "" || Number.isNaN(Number(value))) return "";
+  return `${Number(value).toFixed(Number(value) % 1 ? 2 : 0)} kr`;
+}
+
+function sumSpent() {
+  let total = 0;
+  for (const game of state.games) {
+    if (game.status !== "owned") continue;
+    const copies = gameCopies(game);
+    const copySum = copies.reduce((sum, item) => sum + (Number(item.paidPrice) || 0), 0);
+    total += copySum || Number(game.paidPrice) || 0;
+  }
+  return total;
+}
+
+function sumHunting() {
+  return state.games
+    .filter((g) => g.status === "wishlist")
+    .reduce((sum, g) => sum + (Number(g.maxPrice) || 0), 0);
+}
+
+function regionSelect(selectId, selected) {
+  const opts = [
+    ["", "Region"],
+    ["pal", "PAL"],
+    ["ntsc-u", "NTSC-U"],
+    ["ntsc-j", "NTSC-J"],
+  ];
+  return `<select id="${selectId}">${opts
+    .map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`)
+    .join("")}</select>`;
+}
+
+function kitFields(prefix, item = {}) {
+  const kit = {
+    box: Boolean(item.box),
+    manual: Boolean(item.manual),
+    inserts: Boolean(item.inserts),
+  };
+  return `<fieldset class="kit compact">
+    <label class="check"><input type="checkbox" id="${prefix}-box" ${kit.box ? "checked" : ""} /> Box</label>
+    <label class="check"><input type="checkbox" id="${prefix}-manual" ${kit.manual ? "checked" : ""} /> Manual</label>
+    <label class="check"><input type="checkbox" id="${prefix}-inserts" ${kit.inserts ? "checked" : ""} /> Inserts</label>
+  </fieldset>`;
+}
+
+function applyKitFromCondition(form, condition) {
+  const kit = inferredKit(condition);
+  if (form.elements.hasBox) form.elements.hasBox.checked = kit.box;
+  if (form.elements.hasManual) form.elements.hasManual.checked = kit.manual;
+  if (form.elements.hasInserts) form.elements.hasInserts.checked = kit.inserts;
 }
 
 function gamesForSheet(status) {
@@ -350,16 +478,162 @@ function exportSheet(status) {
   URL.revokeObjectURL(a.href);
 }
 
+function peripheralsFor() {
+  const q = els.search.value.trim().toLowerCase();
+  return state.peripherals
+    .filter((p) => (p.status || "owned") === peripheralStatus)
+    .filter((p) => consoleFilter === "all" || p.consoleId === consoleFilter)
+    .filter((p) => !q || p.title.toLowerCase().includes(q));
+}
+
+function renderPeripheralChips() {
+  const used = [...new Set(state.peripherals.filter((p) => (p.status || "owned") === peripheralStatus).map((p) => p.consoleId))];
+  const statusChips = ["owned", "wishlist"]
+    .map(
+      (status) =>
+        `<button class="chip ${peripheralStatus === status ? "active" : ""}" data-peri-status="${status}">${status === "owned" ? "Owned" : "Wishlist"}</button>`
+    )
+    .join("");
+  const chips = [`<button class="chip ${consoleFilter === "all" ? "active" : ""}" data-filter="all" title="All">All</button>`]
+    .concat(
+      used.map((id) => {
+        const con = consoleById(id);
+        return `<button class="chip chip-logo ${consoleFilter === id ? "active" : ""}" data-filter="${id}">${consoleLogo(id, con?.name)}</button>`;
+      })
+    )
+    .join("");
+  return `<div class="toolbar">${statusChips}${chips}</div>`;
+}
+
+function sortKeyFor(status) {
+  if (status === "wishlist") return "wishlist";
+  if (status === "sold") return "sold";
+  return "collection";
+}
+
+function currentSort(status) {
+  return gameSort[sortKeyFor(status)] || "added";
+}
+
+function readSavedSort() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("game-shelf-sort") || "null");
+    if (!raw || typeof raw !== "object") return;
+    if (raw.collection) gameSort.collection = raw.collection;
+    if (raw.wishlist) gameSort.wishlist = raw.wishlist;
+    if (raw.sold) gameSort.sold = raw.sold;
+    if (raw.reverse) sortReverse = { ...sortReverse, ...raw.reverse };
+  } catch {
+    /* ignore */
+  }
+}
+
+function writeSavedSort() {
+  localStorage.setItem("game-shelf-sort", JSON.stringify({ ...gameSort, reverse: sortReverse }));
+}
+
+function primaryGenre(game) {
+  return (game.genres || []).find(Boolean) || "";
+}
+
+function compareGames(sort) {
+  return (a, b) => {
+    if (sort === "title") return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    if (sort === "console") {
+      const ac = consoleById(a.consoleId)?.name || "";
+      const bc = consoleById(b.consoleId)?.name || "";
+      return ac.localeCompare(bc) || a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    }
+    if (sort === "released") {
+      const ar = a.released || "9999-99-99";
+      const br = b.released || "9999-99-99";
+      return ar.localeCompare(br) || a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    }
+    if (sort === "genre") {
+      const ag = primaryGenre(a) || "zzz";
+      const bg = primaryGenre(b) || "zzz";
+      return ag.localeCompare(bg) || a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    }
+    return (a.addedAt || 0) - (b.addedAt || 0);
+  };
+}
+
+function extraFilters(status) {
+  const genres = [...new Set(state.games.filter((g) => g.status === status).map(primaryGenre).filter(Boolean))].sort();
+  const conds = [
+    ["all", "All conditions"],
+    ["sealed", "Sealed"],
+    ["cib", "CIB"],
+    ["loose", "Loose"],
+    ["digital", "Digital"],
+  ];
+  return `
+    <label class="sort-field tight">
+      <select data-extra-filter="condition">
+        ${conds.map(([value, label]) => `<option value="${value}" ${extraFilter.condition === value ? "selected" : ""}>${label}</option>`).join("")}
+      </select>
+    </label>
+    <label class="sort-field tight">
+      <select data-extra-filter="genre">
+        <option value="all" ${extraFilter.genre === "all" ? "selected" : ""}>All genres</option>
+        ${genres.map((name) => `<option value="${escapeHtml(name)}" ${extraFilter.genre === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}
+      </select>
+    </label>
+    <label class="sort-field tight">
+      <select data-extra-filter="cover">
+        <option value="all" ${extraFilter.cover === "all" ? "selected" : ""}>All covers</option>
+        <option value="missing" ${extraFilter.cover === "missing" ? "selected" : ""}>No cover yet</option>
+      </select>
+    </label>
+    <button type="button" class="ghost" data-sort-reverse="${sortKeyFor(status)}">${sortReverse[sortKeyFor(status)] ? "Z→A" : "A→Z"}</button>
+  `;
+}
+
+function sortSelect(status) {
+  const current = currentSort(status);
+  const opts = [
+    ["added", "Date added"],
+    ["title", "Alphabetical"],
+    ["console", "Console"],
+    ["released", "Date released"],
+    ["genre", "Genre"],
+  ];
+  return `<label class="sort-field">Sort
+    <select data-game-sort="${sortKeyFor(status)}">
+      ${opts.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}
+    </select>
+  </label>${extraFilters(status)}`;
+}
+
+function matchesExtra(game) {
+  if (extraFilter.condition !== "all") {
+    const conditions = [game.condition, ...gameCopies(game).map((c) => c.condition)].filter(Boolean);
+    if (!conditions.includes(extraFilter.condition)) return false;
+  }
+  if (extraFilter.genre !== "all" && primaryGenre(game) !== extraFilter.genre) return false;
+  if (extraFilter.cover === "missing" && game.coverUrl) return false;
+  return true;
+}
+
 function gamesFor(status) {
   const q = els.search.value.trim().toLowerCase();
-  return state.games
+  const rows = state.games
     .filter((g) => g.status === status)
     .filter((g) => consoleFilter === "all" || g.consoleId === consoleFilter)
-    .filter((g) => !q || g.title.toLowerCase().includes(q));
+    .filter((g) => !q || g.title.toLowerCase().includes(q) || (g.location || "").toLowerCase().includes(q) || (g.notes || "").toLowerCase().includes(q))
+    .filter(matchesExtra)
+    .slice()
+    .sort(compareGames(currentSort(status)));
+  if (sortReverse[sortKeyFor(status)]) rows.reverse();
+  return rows;
 }
 
 function setView(next) {
   if (!copy[next]) return;
+  if (view !== next) {
+    consoleFilter = "all";
+    extraFilter = { condition: "all", genre: "all", cover: "all" };
+  }
   view = next;
   els.nav.forEach((btn) => btn.classList.toggle("active", btn.dataset.view === next));
   Object.entries(els.views).forEach(([, node]) => {
@@ -367,10 +641,13 @@ function setView(next) {
   });
   if (els.title) els.title.textContent = copy[next].title;
   if (els.eyebrow) els.eyebrow.textContent = copy[next].eyebrow;
-  const hideShelfTools = next === "consoles" || next === "finn";
-  els.addBtn?.classList.toggle("hidden", hideShelfTools);
-  els.fillCoversBtn?.classList.toggle("hidden", hideShelfTools);
-  els.search?.classList.toggle("hidden", hideShelfTools);
+  const hideAdd = next === "consoles" || next === "finn" || next === "sold";
+  const hideSearch = next === "finn";
+  els.addBtn?.classList.toggle("hidden", hideAdd);
+  els.fillCoversBtn?.classList.toggle("hidden", hideSearch || next === "consoles");
+  els.search?.classList.toggle("hidden", hideSearch);
+  if (els.addBtn) els.addBtn.textContent = next === "peripherals" ? "Add peripheral" : "Add game";
+  if (els.search) els.search.placeholder = "Search games, consoles, peripherals…";
   render();
   document.dispatchEvent(new CustomEvent("shelf:view", { detail: next }));
 }
@@ -410,26 +687,35 @@ function renderChips(status) {
     .join("");
   const exportLabel = status === "wishlist" ? "Export wishlist" : "Export collection";
   const count = state.games.filter((g) => g.status === status).length;
-  return `<div class="toolbar">${chips}<button type="button" class="ghost toolbar-export" data-export-sheet="${status}" ${count ? "" : "disabled"}>${exportLabel}</button></div>`;
+  return `<div class="toolbar">${chips}${sortSelect(status)}<button type="button" class="ghost toolbar-export" data-export-sheet="${status}" ${count ? "" : "disabled"}>${exportLabel}</button></div>`;
 }
 
 function copiesSummary(game) {
   const copies = gameCopies(game);
-  if (game.status !== "owned") {
-    return [conditionLabel(game.condition), game.maxPrice ? formatPrice(game.maxPrice) : ""].filter(Boolean).join(" · ");
+  const sample = copies[0] || game;
+  if (game.status === "wishlist") {
+    return [regionLabel(game.region), kitLabel(game), game.maxPrice ? `≤ ${money(game.maxPrice)}` : ""].filter(Boolean).join(" · ");
   }
   const labels = [...new Set(copies.map((item) => conditionLabel(item.condition)).filter(Boolean))];
-  return labels.join(" · ");
+  const paid = copies.reduce((sum, item) => sum + (Number(item.paidPrice) || 0), 0) || game.paidPrice;
+  return [labels.join(" · "), regionLabel(sample.region), kitLabel(sample), paid ? money(paid) : "", sample.location].filter(Boolean).join(" · ");
 }
 
-function renderGameCard(game) {
-  const extra = copiesSummary(game);
+function cubbyFacts(game) {
+  const year = (game.released || "").slice(0, 4);
+  return [year, primaryGenre(game)].filter(Boolean).join(" · ");
+}
+
+function renderGameCard(game, kind = "game") {
   const copies = gameCopies(game);
+  const openAttr = kind === "peripheral" ? `data-open-peripheral="${game.id}"` : `data-open-game="${game.id}"`;
+  const editAttr = kind === "peripheral" ? `data-edit-peripheral="${game.id}"` : `data-edit="${game.id}"`;
+  const delAttr = kind === "peripheral" ? `data-delete-peripheral="${game.id}"` : `data-delete="${game.id}"`;
   const img = game.coverUrl
     ? `<img data-cover="${game.id}" src="${coverSrc(game.coverUrl)}" alt="">`
     : `<div class="cover-fallback" data-cover="${game.id}" style="background:${spineColor(game.consoleId)};aspect-ratio:${coverRatio(game.consoleId)}"></div>`;
   return `
-    <article class="card cubby" data-open-game="${game.id}">
+    <article class="card cubby" ${openAttr}>
       <div class="cubby-banner">${consoleLogo(game.consoleId, consoleById(game.consoleId)?.name)}</div>
       <div class="cubby-well">
         <div class="case" style="--spine:${spineColor(game.consoleId)}">
@@ -445,12 +731,18 @@ function renderGameCard(game) {
       </div>
       <div class="cubby-meta">
         <h3>${escapeHtml(game.title)}</h3>
-        ${extra ? `<p class="meta">${escapeHtml(extra)}</p>` : ""}
+        ${(() => {
+          const facts = cubbyFacts(game);
+          const extra = copiesSummary(game);
+          return `${facts ? `<p class="meta">${escapeHtml(facts)}</p>` : ""}${extra ? `<p class="meta">${escapeHtml(extra)}</p>` : ""}`;
+        })()}
         ${game.notes ? `<p class="meta">${escapeHtml(game.notes)}</p>` : ""}
         <div class="card-actions">
-          <button class="ghost" data-edit="${game.id}">Edit</button>
-          ${game.status === "wishlist" ? `<button class="ghost" data-own="${game.id}">Got it</button>` : ""}
-          <button class="ghost" data-delete="${game.id}">Remove</button>
+          <button class="ghost" ${editAttr}>Edit</button>
+          ${game.status === "wishlist" ? `<button class="ghost" data-own="${kind === "peripheral" ? "p:" : ""}${game.id}">Got it</button>` : ""}
+          ${game.status === "owned" ? `<button class="ghost" data-sold="${kind === "peripheral" ? "p:" : ""}${game.id}">Sold</button>` : ""}
+          ${game.status === "sold" ? `<button class="ghost" data-unsold="${kind === "peripheral" ? "p:" : ""}${game.id}">Back on shelf</button>` : ""}
+          <button class="ghost" ${delAttr}>Remove</button>
         </div>
       </div>
     </article>`;
@@ -461,12 +753,11 @@ function renderCollection() {
   const titles = state.games.filter((g) => g.status === "owned").length;
   const copies = state.games.filter((g) => g.status === "owned").reduce((sum, g) => sum + Math.max(gameCopies(g).length, 1), 0);
   const wish = state.games.filter((g) => g.status === "wishlist").length;
-  const consoles = state.consoles.reduce((sum, c) => sum + consoleCopies(c).length, 0);
   els.views.collection.innerHTML = `
     <div class="stats">
       <div class="stat"><span>Game copies</span><strong>${copies}</strong></div>
       <div class="stat"><span>Titles / wishlist</span><strong>${titles} / ${wish}</strong></div>
-      <div class="stat"><span>Consoles</span><strong>${consoles}</strong></div>
+      <div class="stat"><span>Spent / hunting</span><strong>${money(sumSpent()) || "0"} / ${money(sumHunting()) || "0"}</strong></div>
     </div>
     ${renderChips("owned")}
     ${
@@ -475,6 +766,7 @@ function renderCollection() {
         : `<div class="empty">No games here yet. If your shelf vanished, open <a href="/recover.html">recover.html</a> in this same browser.</div>`
     }`;
   hydrateCovers(games);
+  fillMissingMeta("owned");
 }
 
 function renderWishlist() {
@@ -487,28 +779,75 @@ function renderWishlist() {
         : `<div class="empty">Wishlist is empty. Add a title you’re hunting.</div>`
     }`;
   hydrateCovers(games);
+  fillMissingMeta("wishlist");
+}
+
+function renderSold() {
+  const games = gamesFor("sold");
+  const periphs = state.peripherals.filter((p) => p.status === "sold");
+  els.views.sold.innerHTML = `
+    ${renderChips("sold")}
+    ${
+      games.length || periphs.length
+        ? `<div class="kallax"><div class="grid">${games.map(renderGameCard).join("")}${periphs.map((item) => renderGameCard(item, "peripheral")).join("")}</div></div>`
+        : `<div class="empty">Nothing sold or traded yet. Mark a copy as sold to keep the history.</div>`
+    }`;
+  hydrateCovers([...games, ...periphs]);
+  fillMissingMeta("sold");
 }
 
 function renderConsoles() {
-  const tiles = state.consoles
-    .map((c) => {
-      const n = consoleCopies(c).length;
-      return `
-      <button type="button" class="console-tile ${n ? "on" : ""}" data-open-console="${c.id}" title="${escapeHtml(c.name)}">
+  const hunting = state.consoles.filter((c) => c.wanted && !consoleCopies(c).length);
+  const tiles = (c, extraClass = "") => {
+    const n = consoleCopies(c).length;
+    return `
+      <button type="button" class="console-tile ${n ? "on" : ""} ${c.wanted && !n ? "want" : ""} ${extraClass}" data-open-console="${c.id}" title="${escapeHtml(c.name)}">
         ${n ? `<span class="console-count">${n}</span>` : ""}
+        ${c.wanted && !n ? `<span class="console-count hunt">Want</span>` : ""}
         ${consoleLogo(c.id, c.name)}
         <span class="console-name">${escapeHtml(c.name)}</span>
       </button>`;
-    })
-    .join("");
+  };
   const units = state.consoles.reduce((sum, c) => sum + consoleCopies(c).length, 0);
   els.views.consoles.innerHTML = `
-    <p class="meta">Click a system to read about it and add units. Revisions such as PS3 Slim sit on each unit. You currently have ${units} console${units === 1 ? "" : "s"}.</p>
-    <div class="console-grid">${tiles}</div>
+    <p class="meta">Click a system to read about it and add units. Mark systems you are hunting before you own them. You currently have ${units} console${units === 1 ? "" : "s"}.</p>
+    ${
+      hunting.length
+        ? `<p class="meta">Hunting</p><div class="console-grid">${hunting.map((c) => tiles(c)).join("")}</div>`
+        : ""
+    }
+    <div class="console-grid">${state.consoles.filter((c) => !hunting.includes(c)).map((c) => tiles(c)).join("")}</div>
     <form class="add-console" id="add-console-form">
       <input name="name" placeholder="Add another console" required maxlength="40" />
       <button class="primary" type="submit">Add</button>
     </form>`;
+}
+
+function renderPeripherals() {
+  const items = peripheralsFor();
+  const count = state.peripherals.filter((p) => (p.status || "owned") === peripheralStatus).length;
+  const copies = items.reduce((sum, p) => sum + Math.max(gameCopies(p).length, 1), 0);
+  const tiles = PRESET_CONSOLES.map(
+    (c) => `
+      <button type="button" class="console-tile" data-add-peripherals="${c.id}" title="${escapeHtml(c.name)}">
+        ${consoleLogo(c.id, c.name)}
+        <span class="console-name">${escapeHtml(c.name)}</span>
+      </button>`
+  ).join("");
+  els.views.peripherals.innerHTML = `
+    <div class="stats">
+      <div class="stat"><span>Accessories</span><strong>${count}</strong></div>
+      <div class="stat"><span>Units</span><strong>${copies}</strong></div>
+    </div>
+    <p class="meta">Click a console for its official pads, cameras, multitaps, and so on. Pictures come from Wikipedia — use Fetch covers if a cubby is empty.</p>
+    <div class="console-grid">${tiles}</div>
+    ${renderPeripheralChips()}
+    ${
+      items.length
+        ? `<div class="kallax"><div class="grid">${items.map((item) => renderGameCard(item, "peripheral")).join("")}</div></div>`
+        : `<div class="empty">${peripheralStatus === "wishlist" ? "Wishlist is empty. Add official hardware while the Wishlist chip is selected." : "No peripherals yet. Pick a console above to add official hardware."}</div>`
+    }`;
+  hydrateCovers(items);
 }
 
 function escapeHtml(value) {
@@ -549,9 +888,45 @@ function setCoverPreview(url, blob) {
   els.coverPreview.classList.add("empty-cover");
 }
 
+function syncFormMode() {
+  const status = els.form.elements.status?.value || "owned";
+  els.form.querySelectorAll(".wishlist-only").forEach((node) => node.classList.toggle("hidden", status !== "wishlist"));
+  els.form.querySelectorAll(".owned-only").forEach((node) => node.classList.toggle("hidden", status !== "owned" && status !== "sold"));
+}
+
+function fillExtraFields(item = {}) {
+  const sample = gameCopies(item)[0] || item;
+  if (els.form.elements.region) els.form.elements.region.value = item.region || sample.region || "";
+  if (els.form.elements.location) els.form.elements.location.value = item.location || sample.location || "";
+  if (els.form.elements.paidPrice) els.form.elements.paidPrice.value = item.paidPrice ?? sample.paidPrice ?? "";
+  const kit = {
+    box: item.box ?? sample.box,
+    manual: item.manual ?? sample.manual,
+    inserts: item.inserts ?? sample.inserts,
+  };
+  if (els.form.elements.hasBox) els.form.elements.hasBox.checked = Boolean(kit.box);
+  if (els.form.elements.hasManual) els.form.elements.hasManual.checked = Boolean(kit.manual);
+  if (els.form.elements.hasInserts) els.form.elements.hasInserts.checked = Boolean(kit.inserts);
+  syncFormMode();
+}
+
+function extraFieldsFromForm() {
+  return {
+    region: els.form.elements.region?.value || "",
+    location: els.form.elements.location?.value.trim() || "",
+    paidPrice: els.form.elements.paidPrice?.value ? Number(els.form.elements.paidPrice.value) : null,
+    box: Boolean(els.form.elements.hasBox?.checked),
+    manual: Boolean(els.form.elements.hasManual?.checked),
+    inserts: Boolean(els.form.elements.hasInserts?.checked),
+  };
+}
+
 function openGameDialog(game) {
+  itemKind = "game";
+  els.form.classList.remove("peripheral-form");
   editingId = game?.id || null;
   pendingCover = null;
+  pendingMeta = { released: game?.released || "", genres: Array.isArray(game?.genres) ? game.genres : [] };
   els.dialogTitle.textContent = game ? "Edit game" : "Add a game";
   els.form.reset();
   els.searchResults.innerHTML = "";
@@ -566,23 +941,57 @@ function openGameDialog(game) {
     els.form.elements.notes.value = game.notes || "";
     els.form.elements.coverUrl.value = game.coverUrl || "";
     els.form.elements.catalogSlug.value = game.catalogSlug || "";
+    fillExtraFields(game);
     loadCoverBlob(game.id).then((blob) => setCoverPreview(game.coverUrl, blob));
   } else {
     els.form.elements.status.value = status;
     els.form.elements.coverUrl.value = "";
     els.form.elements.catalogSlug.value = "";
+    fillExtraFields({ ...inferredKit(status === "owned" ? "cib" : "") });
+    if (status === "owned") {
+      els.form.elements.condition.value = "cib";
+      applyKitFromCondition(els.form, "cib");
+    }
     setCoverPreview("", null);
+    syncFormMode();
   }
   els.dialog.showModal();
 }
 
+function openPeripheralEdit(item) {
+  itemKind = "peripheral";
+  els.form.classList.add("peripheral-form");
+  editingId = item?.id || null;
+  pendingCover = null;
+  els.dialogTitle.textContent = "Edit peripheral";
+  els.form.reset();
+  els.searchResults.innerHTML = "";
+  els.searchResults.classList.add("hidden");
+  fillConsolePicker("owned", item.consoleId);
+  els.form.elements.title.value = item.title;
+  els.form.elements.status.value = item.status || "owned";
+  els.form.elements.condition.value = item.condition || "";
+  els.form.elements.notes.value = item.notes || "";
+  els.form.elements.coverUrl.value = item.coverUrl || "";
+  els.form.elements.catalogSlug.value = item.searchQuery || "";
+  fillExtraFields(item);
+  loadCoverBlob(item.id).then((blob) => setCoverPreview(item.coverUrl, blob));
+  els.dialog.showModal();
+}
+
 async function upsertGame(data) {
+  if (itemKind === "peripheral") {
+    await upsertPeripheral(data);
+    return;
+  }
   if (editingId) {
     state.games = state.games.map((g) => {
       if (g.id !== editingId) return g;
       const next = { ...g, ...data, copies: gameCopies(g) };
-      if (data.status === "owned" && !gameCopies(next).length) {
-        next.copies = [{ id: uid(), condition: data.condition || "", notes: "" }];
+      if (pendingMeta.released) next.released = pendingMeta.released;
+      if (pendingMeta.genres?.length) next.genres = pendingMeta.genres;
+      if ((data.status === "owned" || data.status === "sold") && !gameCopies(next).length) {
+        next.copies = [migrateCopyItem({ condition: data.condition || "" }, data)];
       }
       return next;
     });
@@ -600,15 +1009,163 @@ async function upsertGame(data) {
     twin.copies = [...gameCopies(twin), { id: uid(), condition: data.condition || "", notes: "" }];
     if (data.coverUrl && !twin.coverUrl) twin.coverUrl = data.coverUrl;
     if (data.catalogSlug && !twin.catalogSlug) twin.catalogSlug = data.catalogSlug;
+    if (pendingMeta.released && !twin.released) twin.released = pendingMeta.released;
+    if (pendingMeta.genres?.length && !twin.genres?.length) twin.genres = pendingMeta.genres;
     if (pendingCover) await putCoverBlob(twin.id, pendingCover);
     save();
     return;
   }
   const id = uid();
-  const copies = data.status === "owned" ? [{ id: uid(), condition: data.condition || "", notes: "" }] : [];
-  state.games.push({ id, addedAt: Date.now(), ...data, copies });
+  const copies =
+    data.status === "owned" || data.status === "sold" ? [migrateCopyItem({ condition: data.condition || "" }, data)] : [];
+  state.games.push({
+    id,
+    addedAt: Date.now(),
+    soldAt: data.status === "sold" ? Date.now() : null,
+    ...data,
+    released: pendingMeta.released || "",
+    genres: pendingMeta.genres || [],
+    copies,
+  });
   if (pendingCover) await putCoverBlob(id, pendingCover);
   save();
+}
+
+async function upsertPeripheral(data) {
+  if (editingId) {
+    state.peripherals = state.peripherals.map((p) => {
+      if (p.id !== editingId) return p;
+      return {
+        ...p,
+        ...data,
+        searchQuery: data.catalogSlug || p.searchQuery,
+        copies: gameCopies(p).length ? gameCopies(p) : data.status === "owned" || data.status === "sold" ? [migrateCopyItem(data, data)] : [],
+      };
+    });
+    if (pendingCover) await putCoverBlob(editingId, pendingCover);
+    save();
+    return;
+  }
+  await addPeripheral({
+    consoleId: data.consoleId,
+    title: data.title,
+    officialId: "",
+    search: data.catalogSlug || data.title,
+    condition: data.condition,
+    notes: data.notes,
+    coverUrl: data.coverUrl,
+  });
+}
+
+function ownedCount(consoleId, officialId, title) {
+  return state.peripherals.filter((p) => {
+    if (p.consoleId !== consoleId) return false;
+    if (officialId) return p.officialId === officialId;
+    return normalizeTitle(p.title) === normalizeTitle(title);
+  }).length;
+}
+
+async function addPeripheral({ consoleId, title, officialId, search, condition = "cib", notes = "", coverUrl = "" }) {
+  const status = peripheralStatus === "wishlist" ? "wishlist" : "owned";
+  const extras = inferredKit(condition);
+  const twin = state.peripherals.find((p) => {
+    if (p.consoleId !== consoleId) return false;
+    if (officialId) return p.officialId === officialId;
+    return normalizeTitle(p.title) === normalizeTitle(title);
+  });
+  if (twin) {
+    if (status === "owned") {
+      twin.status = "owned";
+      twin.copies = [...gameCopies(twin), migrateCopyItem({ condition }, extras)];
+    }
+    if (coverUrl && !twin.coverUrl) twin.coverUrl = coverUrl;
+    if (pendingCover) await putCoverBlob(twin.id, pendingCover);
+    save();
+    render();
+    paintOfficialList();
+    return twin;
+  }
+  const id = uid();
+  const item = {
+    id,
+    addedAt: Date.now(),
+    title,
+    consoleId,
+    officialId: officialId || "",
+    searchQuery: search || title,
+    status,
+    condition,
+    notes,
+    coverUrl,
+    ...inferredKit(condition),
+    copies: status === "owned" ? [migrateCopyItem({ condition }, extras)] : [],
+  };
+  state.peripherals.push(item);
+  if (pendingCover) await putCoverBlob(id, pendingCover);
+  save();
+  render();
+  paintOfficialList();
+  fetchItemCover(item, "peripheral").then(() => render());
+  return item;
+}
+
+function showPeripheralConsoleStep() {
+  peripheralConsoleId = "";
+  if (els.peripheralTitle) els.peripheralTitle.textContent = "Add a peripheral";
+  if (els.peripheralSub) els.peripheralSub.textContent = "Pick a console, then add official hardware from the list.";
+  els.peripheralList?.classList.add("hidden");
+  els.peripheralCustom?.classList.add("hidden");
+  els.peripheralBack?.classList.add("hidden");
+  if (!els.peripheralGrid) return;
+  els.peripheralGrid.classList.remove("hidden");
+  els.peripheralGrid.innerHTML = PRESET_CONSOLES.map(
+    (c) => `
+      <button type="button" class="console-tile" data-pick-peripheral-console="${c.id}" title="${escapeHtml(c.name)}">
+        ${consoleLogo(c.id, c.name)}
+        <span class="console-name">${escapeHtml(c.name)}</span>
+      </button>`
+  ).join("");
+}
+
+function paintOfficialList() {
+  if (!peripheralConsoleId || !els.peripheralList) return;
+  const list = officialFor(peripheralConsoleId);
+  els.peripheralList.innerHTML = list
+    .map((item) => {
+      const n = ownedCount(peripheralConsoleId, item.id, item.name);
+      return `
+        <div class="official-row">
+          <span>
+            <strong>${escapeHtml(item.name)}</strong>
+            ${n ? `<em>${n} in collection</em>` : ""}
+          </span>
+          <button type="button" class="primary" data-add-official="${item.id}">${
+            peripheralStatus === "wishlist" ? (n ? "Want another" : "Want") : n ? "Add another" : "Add"
+          }</button>
+        </div>`;
+    })
+    .join("");
+}
+
+function openPeripheralCatalog(consoleId = "") {
+  if (consoleId) {
+    showOfficialStep(consoleId);
+  } else {
+    showPeripheralConsoleStep();
+  }
+  els.peripheralDialog?.showModal();
+}
+
+function showOfficialStep(consoleId) {
+  peripheralConsoleId = consoleId;
+  const con = consoleById(consoleId);
+  if (els.peripheralTitle) els.peripheralTitle.textContent = `${con?.name || "Console"} peripherals`;
+  if (els.peripheralSub) els.peripheralSub.textContent = "Official first-party hardware for this system. Add as many as you own.";
+  els.peripheralGrid?.classList.add("hidden");
+  els.peripheralList?.classList.remove("hidden");
+  els.peripheralCustom?.classList.remove("hidden");
+  els.peripheralBack?.classList.remove("hidden");
+  paintOfficialList();
 }
 
 function conditionSelect(selectId, selected) {
@@ -660,7 +1217,27 @@ function burstFireworksOn(host, spread = 40) {
 async function confirmGotIt(condition) {
   if (!pendingOwnId) return;
   const id = pendingOwnId;
+  const kind = pendingOwnKind;
   pendingOwnId = null;
+  const extras = {
+    condition,
+    region: els.gotItForm?.elements.region?.value || "",
+    location: els.gotItForm?.elements.location?.value.trim() || "",
+    paidPrice: els.gotItForm?.elements.paidPrice?.value ? Number(els.gotItForm.elements.paidPrice.value) : null,
+    box: Boolean(els.gotItForm?.elements.hasBox?.checked),
+    manual: Boolean(els.gotItForm?.elements.hasManual?.checked),
+    inserts: Boolean(els.gotItForm?.elements.hasInserts?.checked),
+  };
+  const copyItem = migrateCopyItem(extras, extras);
+  if (kind === "peripheral") {
+    state.peripherals = state.peripherals.map((p) =>
+      p.id === id ? { ...p, status: "owned", condition, ...extras, copies: [...gameCopies(p), copyItem] } : p
+    );
+    save();
+    peripheralStatus = "owned";
+    setView("peripherals");
+    return;
+  }
   const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
   const card = document.querySelector(`#view-wishlist [data-open-game="${id}"]`);
   const start = card?.getBoundingClientRect();
@@ -671,9 +1248,10 @@ async function confirmGotIt(condition) {
           ...g,
           status: "owned",
           condition,
+          ...extras,
           copies: gameCopies(g).length
-            ? gameCopies(g).map((copy, index) => (index === 0 ? { ...copy, condition: condition || copy.condition } : copy))
-            : [{ id: uid(), condition, notes: "" }],
+            ? gameCopies(g).map((row, index) => (index === 0 ? { ...row, ...copyItem, id: row.id } : row))
+            : [copyItem],
         }
       : g
   );
@@ -719,16 +1297,23 @@ async function confirmGotIt(condition) {
   burstFireworksOn(dest?.querySelector(".cubby-well") || dest, 36);
 }
 
-function openGotItDialog(id) {
-  const game = state.games.find((g) => g.id === id);
-  if (!game || !els.gotIt) return;
+function openGotItDialog(id, kind = "game") {
+  const item = kind === "peripheral" ? state.peripherals.find((p) => p.id === id) : state.games.find((g) => g.id === id);
+  if (!item || !els.gotIt) return;
   pendingOwnId = id;
+  pendingOwnKind = kind;
   if (els.gotItTitle) {
-    const con = consoleById(game.consoleId)?.name || "";
-    els.gotItTitle.textContent = con ? `${game.title} · ${con}` : game.title;
+    const con = consoleById(item.consoleId)?.name || "";
+    els.gotItTitle.textContent = con ? `${item.title} · ${con}` : item.title;
   }
-  const current = game.condition || "cib";
-  if (els.gotItForm) els.gotItForm.elements.condition.value = current;
+  const current = item.condition || "cib";
+  if (els.gotItForm) {
+    els.gotItForm.elements.condition.value = current;
+    if (els.gotItForm.elements.region) els.gotItForm.elements.region.value = item.region || "";
+    if (els.gotItForm.elements.location) els.gotItForm.elements.location.value = item.location || "";
+    if (els.gotItForm.elements.paidPrice) els.gotItForm.elements.paidPrice.value = "";
+    applyKitFromCondition(els.gotItForm, current);
+  }
   els.gotItConditions?.querySelectorAll("[data-condition]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.condition === current);
   });
@@ -780,31 +1365,91 @@ function paintAbout(info) {
   `;
 }
 
+function hideLongplay() {
+  if (!els.detailLongplay) return;
+  els.detailLongplay.innerHTML = "";
+  els.detailLongplay.classList.add("hidden");
+}
+
+function paintLongplay(hit) {
+  if (!els.detailLongplay) return;
+  if (!hit?.videoId) {
+    hideLongplay();
+    return;
+  }
+  const id = encodeURIComponent(hit.videoId);
+  const watch = `https://www.youtube.com/watch?v=${id}`;
+  els.detailLongplay.classList.remove("hidden");
+  els.detailLongplay.innerHTML = `
+    <p class="meta">Longplay</p>
+    <div class="longplay-frame">
+      <iframe
+        src="https://www.youtube-nocookie.com/embed/${id}"
+        title="${escapeHtml(hit.title || "Longplay")}"
+        allow="accelerometer; clipboard-write; encrypted-media; picture-in-picture"
+        allowfullscreen
+        loading="lazy"
+      ></iframe>
+    </div>
+    <p class="meta">
+      <a href="${escapeHtml(watch)}" target="_blank" rel="noopener">${escapeHtml(hit.title || "Watch on YouTube")}</a>
+      ${hit.author ? ` · ${escapeHtml(hit.author)}` : ""}
+    </p>
+  `;
+}
+
+async function loadLongplay(query, platform) {
+  const key = `${platform}|${query}`;
+  if (longplayCache.has(key)) return longplayCache.get(key);
+  try {
+    const params = new URLSearchParams({ q: query, platform: platform || "" });
+    const res = await fetch(`/api/longplay?${params}`);
+    const data = await res.json();
+    longplayCache.set(key, data);
+    return data;
+  } catch {
+    const empty = { videoId: null };
+    longplayCache.set(key, empty);
+    return empty;
+  }
+}
+
 function renderGameCopies(game) {
-  if (game.status !== "owned") {
+  if (game.status === "wishlist") {
     els.detailCopies.innerHTML = `<p class="meta">Copies are tracked once you own it. Use Got it when a copy lands.</p>`;
     return;
   }
   const copies = gameCopies(game);
   els.detailCopies.innerHTML = `
-    <p class="meta">Your copies</p>
+    <p class="meta">${game.status === "sold" ? "Copies that left the shelf" : "Your copies"}</p>
     <div class="copy-list">
       ${
         copies
-          .map(
-            (item) => `
+          .map((item) => {
+            const bits = [conditionLabel(item.condition) || "Unspecified", regionLabel(item.region), kitLabel(item), item.paidPrice ? money(item.paidPrice) : "", item.location]
+              .filter(Boolean)
+              .join(" · ");
+            return `
         <div class="copy-row">
-          <strong>${escapeHtml(conditionLabel(item.condition) || "Unspecified")}</strong>
+          <strong>${escapeHtml(bits)}</strong>
           <button type="button" class="ghost" data-remove-copy="${item.id}">Remove</button>
-        </div>`
-          )
+        </div>`;
+          })
           .join("") || `<p class="meta">No copies left. Add one below.</p>`
       }
     </div>
-    <div class="copy-add">
+    ${
+      game.status === "owned"
+        ? `<div class="copy-add stack">
       ${conditionSelect("copy-condition", "cib")}
+      ${regionSelect("copy-region", game.region || "")}
+      ${kitFields("copy", inferredKit("cib"))}
+      <input id="copy-paid" type="number" min="0" step="0.01" placeholder="Price paid" />
+      <input id="copy-location" maxlength="80" placeholder="Location" />
       <button type="button" class="primary" id="add-copy-btn">Add copy</button>
-    </div>
+    </div>`
+        : ""
+    }
   `;
 }
 
@@ -828,6 +1473,11 @@ function renderConsoleUnits(con) {
     <div class="copy-add stack">
       ${revisionFields(con.custom ? "" : con.id)}
       <button type="button" class="primary" id="add-unit-btn">Add console</button>
+      ${
+        con.owned
+          ? ""
+          : `<button type="button" class="ghost" id="want-console-btn">${con.wanted ? "Stop hunting" : "Want this console"}</button>`
+      }
     </div>
   `;
 }
@@ -840,10 +1490,20 @@ function refreshOpenDetail() {
       return;
     }
     const n = gameCopies(game).length;
-    els.detailSub.textContent = [consoleById(game.consoleId)?.name, game.status === "owned" ? `${n} owned` : "Wishlist"]
+    els.detailSub.textContent = [consoleById(game.consoleId)?.name, game.status === "owned" ? `${n} owned` : game.status === "sold" ? "Sold / traded" : "Wishlist"]
       .filter(Boolean)
       .join(" · ");
     renderGameCopies(game);
+  }
+  if (detail.kind === "peripheral") {
+    const item = state.peripherals.find((p) => p.id === detail.id);
+    if (!item) {
+      els.detail.close();
+      return;
+    }
+    const n = gameCopies(item).length;
+    els.detailSub.textContent = [consoleById(item.consoleId)?.name, `${n} owned`].filter(Boolean).join(" · ");
+    renderGameCopies(item);
   }
   if (detail.kind === "console") {
     const con = consoleById(detail.id);
@@ -876,9 +1536,14 @@ async function openGameDetail(id) {
     /* ignore */
   }
   els.detailAbout.innerHTML = `<p>Loading a short summary…</p>`;
+  hideLongplay();
   refreshOpenDetail();
   els.detail.showModal();
+  const opened = id;
   paintAbout(await loadInfo(game.title, game.consoleId, "game", game.catalogSlug || ""));
+  if (detail.kind === "game" && detail.id === opened) {
+    paintLongplay(await loadLongplay(game.title, game.consoleId));
+  }
 }
 
 async function openConsoleDetail(id) {
@@ -894,15 +1559,143 @@ async function openConsoleDetail(id) {
     els.detailCover.removeAttribute("src");
   }
   els.detailAbout.innerHTML = `<p>Loading a short summary…</p>`;
+  hideLongplay();
   refreshOpenDetail();
   els.detail.showModal();
   paintAbout(await loadInfo(con.name, con.id, "console"));
 }
 
+async function openPeripheralDetail(id) {
+  const item = state.peripherals.find((p) => p.id === id);
+  if (!item || !els.detail) return;
+  detail = { kind: "peripheral", id };
+  els.detailTitle.textContent = item.title;
+  els.detailEdit?.classList.remove("hidden");
+  els.detailCover.classList.remove("logo-cover");
+  if (item.coverUrl) {
+    els.detailCover.src = coverSrc(item.coverUrl);
+  } else {
+    els.detailCover.removeAttribute("src");
+  }
+  try {
+    const blob = await loadCoverBlob(item.id);
+    if (blob) els.detailCover.src = URL.createObjectURL(blob);
+  } catch {
+    /* ignore */
+  }
+  els.detailAbout.innerHTML = `<p>Loading a short summary…</p>`;
+  hideLongplay();
+  refreshOpenDetail();
+  els.detail.showModal();
+  paintAbout(await loadInfo(item.searchQuery || item.title, item.consoleId, "peripheral"));
+}
+
 function render() {
+  renderGlobalSearch();
   if (view === "collection") renderCollection();
   if (view === "wishlist") renderWishlist();
+  if (view === "sold") renderSold();
   if (view === "consoles") renderConsoles();
+  if (view === "peripherals") renderPeripherals();
+}
+
+function renderGlobalSearch() {
+  if (!els.globalSearch) return;
+  const q = els.search?.value.trim().toLowerCase() || "";
+  if (q.length < 2 || view === "finn") {
+    els.globalSearch.classList.add("hidden");
+    els.globalSearch.innerHTML = "";
+    return;
+  }
+  const games = state.games.filter((g) => g.title.toLowerCase().includes(q) || (g.notes || "").toLowerCase().includes(q) || (g.location || "").toLowerCase().includes(q));
+  const consoles = state.consoles.filter((c) => c.name.toLowerCase().includes(q));
+  const periphs = state.peripherals.filter((p) => p.title.toLowerCase().includes(q));
+  if (!games.length && !consoles.length && !periphs.length) {
+    els.globalSearch.classList.add("hidden");
+    els.globalSearch.innerHTML = "";
+    return;
+  }
+  const pile = (status) => ({ owned: "collection", wishlist: "wishlist", sold: "sold" }[status] || status);
+  els.globalSearch.classList.remove("hidden");
+  els.globalSearch.innerHTML = `
+    <p class="meta">Across the shelf</p>
+    <div class="global-hits">
+      ${games
+        .slice(0, 8)
+        .map(
+          (g) =>
+            `<button type="button" class="ghost" data-jump-game="${g.id}">${escapeHtml(g.title)} · ${escapeHtml(consoleById(g.consoleId)?.name || "")} · ${escapeHtml(g.status)}</button>`
+        )
+        .join("")}
+      ${consoles
+        .slice(0, 6)
+        .map((c) => `<button type="button" class="ghost" data-open-console="${c.id}">${escapeHtml(c.name)} · console</button>`)
+        .join("")}
+      ${periphs
+        .slice(0, 6)
+        .map((p) => `<button type="button" class="ghost" data-jump-peripheral="${p.id}">${escapeHtml(p.title)} · peripheral</button>`)
+        .join("")}
+    </div>
+  `;
+}
+
+function scheduleBackup() {
+  clearTimeout(backupTimer);
+  backupTimer = window.setTimeout(() => {
+    fetch("/api/backup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    }).catch(() => {});
+  }, 900);
+}
+
+function showUndo(message, restore, commit) {
+  if (undoAction?.commit) undoAction.commit();
+  undoAction = { restore, commit };
+  if (els.undoText) els.undoText.textContent = message;
+  els.undoToast?.classList.remove("hidden");
+  clearTimeout(undoTimer);
+  undoTimer = window.setTimeout(() => {
+    undoAction?.commit?.();
+    undoAction = null;
+    els.undoToast?.classList.add("hidden");
+  }, 10000);
+}
+
+function splitOwnRef(raw) {
+  if (String(raw).startsWith("p:")) return { kind: "peripheral", id: String(raw).slice(2) };
+  return { kind: "game", id: raw };
+}
+
+function findDuplicate(title, consoleId, exceptId) {
+  const want = normalizeTitle(title);
+  return state.games.find(
+    (g) => g.id !== exceptId && g.consoleId === consoleId && normalizeTitle(g.title) === want && g.status !== "sold"
+  );
+}
+
+function markSold(kind, id) {
+  if (kind === "peripheral") {
+    state.peripherals = state.peripherals.map((p) => (p.id === id ? { ...p, status: "sold", soldAt: Date.now() } : p));
+  } else {
+    state.games = state.games.map((g) => (g.id === id ? { ...g, status: "sold", soldAt: Date.now() } : g));
+  }
+  save();
+  setView("sold");
+}
+
+function restoreSold(kind, id) {
+  if (kind === "peripheral") {
+    state.peripherals = state.peripherals.map((p) => (p.id === id ? { ...p, status: "owned", soldAt: null } : p));
+    peripheralStatus = "owned";
+    save();
+    setView("peripherals");
+    return;
+  }
+  state.games = state.games.map((g) => (g.id === id ? { ...g, status: "owned", soldAt: null } : g));
+  save();
+  setView("collection");
 }
 
 function openDb() {
@@ -1007,18 +1800,72 @@ function pickCover(items, title) {
   return ranked[0]?.cover || null;
 }
 
+const metaTried = new Set();
+let metaFillBusy = false;
+
+async function fillMissingMeta(status) {
+  const sort = currentSort(status);
+  if (sort !== "released" && sort !== "genre") return;
+  if (metaFillBusy) return;
+  const missing = state.games.filter(
+    (g) => g.status === status && !metaTried.has(g.id) && (!g.released || !g.genres?.length)
+  );
+  if (!missing.length) return;
+  metaFillBusy = true;
+  let changed = false;
+  for (const game of missing) {
+    metaTried.add(game.id);
+    try {
+      const info = await loadInfo(game.title, game.consoleId, "game", game.catalogSlug || "");
+      if (info.released && !game.released) {
+        game.released = info.released;
+        changed = true;
+      }
+      if (Array.isArray(info.genres) && info.genres.length && !game.genres?.length) {
+        game.genres = info.genres;
+        changed = true;
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  metaFillBusy = false;
+  if (changed) {
+    save();
+    render();
+  }
+}
+
+async function fetchItemCover(item, kind) {
+  const q = item.searchQuery || item.title;
+  try {
+    const res = await fetch(
+      `/api/cover?q=${encodeURIComponent(q)}&platform=${encodeURIComponent(item.consoleId || "")}&kind=${encodeURIComponent(kind)}`
+    );
+    const data = await res.json();
+    if (data.cover) {
+      item.coverUrl = data.cover;
+      save();
+    }
+  } catch {
+    /* skip */
+  }
+}
+
 let coverFillBusy = false;
 
 async function fillMissingCovers() {
   if (coverFillBusy) return;
   coverFillBusy = true;
   els.fillCoversBtn.disabled = true;
+  const pool = view === "peripherals" ? state.peripherals : state.games;
+  const kind = view === "peripherals" ? "peripheral" : "game";
   const missing = [];
-  for (const game of state.games) {
-    if (game.coverUrl) continue;
-    const local = await loadCoverBlob(game.id);
+  for (const item of pool) {
+    if (item.coverUrl) continue;
+    const local = await loadCoverBlob(item.id);
     if (local) continue;
-    missing.push(game);
+    missing.push(item);
   }
   if (!missing.length) {
     els.fillCoversBtn.disabled = false;
@@ -1027,23 +1874,33 @@ async function fillMissingCovers() {
   }
   for (let i = 0; i < missing.length; i += 1) {
     els.eyebrow.textContent = `Fetching covers ${i + 1} / ${missing.length}`;
-    try {
-      const res = await fetch(
-        `/api/cover?q=${encodeURIComponent(missing[i].title)}&platform=${encodeURIComponent(missing[i].consoleId || "")}`
-      );
-      const data = await res.json();
-      if (data.cover) {
-        missing[i].coverUrl = data.cover;
-        save();
-      }
-    } catch {
-      /* skip this title and keep going */
-    }
+    await fetchItemCover(missing[i], kind);
     if (i === missing.length - 1 || i % 4 === 3) render();
   }
   els.eyebrow.textContent = copy[view].eyebrow;
   els.fillCoversBtn.disabled = false;
   coverFillBusy = false;
+}
+
+function rankSearchHits(items, query) {
+  const want = normalizeTitle(query);
+  if (!want) return [];
+  return items
+    .map((item) => {
+      const got = normalizeTitle(item.title);
+      const subtitle = String(item.subtitle || "").toLowerCase();
+      let score = 0;
+      if (got === want) score = 100;
+      else if (got.startsWith(want) || want.startsWith(got)) score = 80;
+      else if (got.includes(want) || want.includes(got)) score = 55;
+      else if (/video game/.test(subtitle)) score = 20;
+      if (/\b(film|movie|tv series|album|song|band|company|magazine)\b/.test(subtitle)) score -= 40;
+      return { item, score };
+    })
+    .filter((row) => row.score >= 55)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6)
+    .map((row) => row.item);
 }
 
 function showSearchResults(items, source) {
@@ -1080,7 +1937,25 @@ els.nav.forEach((btn) =>
   })
 );
 els.search?.addEventListener("input", render);
-els.addBtn?.addEventListener("click", () => openGameDialog());
+document.body.addEventListener("change", (event) => {
+  const sort = event.target.closest("[data-game-sort]");
+  if (sort) {
+    const which = sort.dataset.gameSort || sortKeyFor(view);
+    gameSort[which] = sort.value;
+    writeSavedSort();
+    render();
+    return;
+  }
+  const extra = event.target.closest("[data-extra-filter]");
+  if (extra) {
+    extraFilter[extra.dataset.extraFilter] = extra.value;
+    render();
+  }
+});
+els.addBtn?.addEventListener("click", () => {
+  if (view === "peripherals") openPeripheralCatalog();
+  else openGameDialog();
+});
 els.fillCoversBtn?.addEventListener("click", () => fillMissingCovers());
 els.cancel?.addEventListener("click", () => els.dialog.close());
 els.catalogBtn?.addEventListener("click", async () => {
@@ -1118,7 +1993,9 @@ els.catalogForm?.addEventListener("submit", async (event) => {
 });
 els.form.elements.status.addEventListener("change", () => {
   fillConsolePicker(els.form.elements.status.value, els.form.elements.consoleId.value);
+  syncFormMode();
 });
+els.form.elements.condition?.addEventListener("change", () => applyKitFromCondition(els.form, els.form.elements.condition.value));
 
 els.form.elements.title.addEventListener("input", () => {
   const q = els.form.elements.title.value.trim();
@@ -1129,8 +2006,8 @@ els.form.elements.title.addEventListener("input", () => {
   }
   searchTimer = setTimeout(async () => {
     try {
-      const body = await searchCatalog(q);
-      showSearchResults(body.items || [], body.source);
+      const body = await searchCatalog(q, "");
+      showSearchResults(rankSearchHits(body.items || [], q), body.source);
     } catch (err) {
       els.searchResults.innerHTML = `<button type="button" class="search-hit muted" disabled>${escapeHtml(err.message || "Catalog unreachable")}</button>`;
       els.searchResults.classList.remove("hidden");
@@ -1146,12 +2023,17 @@ els.searchResults.addEventListener("click", (event) => {
   els.form.elements.title.value = item.title;
   els.form.elements.coverUrl.value = item.cover || "";
   els.form.elements.catalogSlug.value = item.slug || "";
+  pendingMeta = {
+    released: item.released || "",
+    genres: Array.isArray(item.genres) ? item.genres : [],
+  };
   pendingCover = null;
   setCoverPreview(item.cover, null);
   els.searchResults.classList.add("hidden");
 });
 
 els.consolePicker.addEventListener("click", (event) => {
+  els.searchResults.classList.add("hidden");
   const btn = event.target.closest("[data-pick]");
   if (!btn) return;
   els.form.elements.consoleId.value = btn.dataset.pick;
@@ -1187,16 +2069,42 @@ els.form.addEventListener("submit", async (event) => {
     notes: els.form.elements.notes.value.trim(),
     coverUrl: els.form.elements.coverUrl.value.trim(),
     catalogSlug: els.form.elements.catalogSlug.value.trim(),
+    ...extraFieldsFromForm(),
   };
   if (!data.title || !data.consoleId) return;
+  if (itemKind === "game") {
+    const dup = findDuplicate(data.title, data.consoleId, editingId);
+    if (dup) {
+      const where = dup.status === "wishlist" ? "the wishlist" : "the collection";
+      if (!window.confirm(`“${dup.title}” is already on ${where} for this console. Add anyway?`)) return;
+    }
+  }
   await upsertGame(data);
   els.dialog.close();
-  setView(data.status === "wishlist" ? "wishlist" : "collection");
+  if (itemKind === "peripheral") setView("peripherals");
+  else if (data.status === "wishlist") setView("wishlist");
+  else if (data.status === "sold") setView("sold");
+  else setView("collection");
 });
 
 document.body.addEventListener("click", (event) => {
   if (event.target.closest(".card-actions")) {
     event.stopPropagation();
+  }
+  const periStatus = event.target.closest("[data-peri-status]");
+  if (periStatus) {
+    peripheralStatus = periStatus.dataset.periStatus;
+    consoleFilter = "all";
+    render();
+    return;
+  }
+  const reverse = event.target.closest("[data-sort-reverse]");
+  if (reverse) {
+    const which = reverse.dataset.sortReverse;
+    sortReverse[which] = !sortReverse[which];
+    writeSavedSort();
+    render();
+    return;
   }
   const filter = event.target.closest("[data-filter]");
   if (filter) {
@@ -1214,23 +2122,99 @@ document.body.addEventListener("click", (event) => {
     openGameDialog(state.games.find((g) => g.id === edit.dataset.edit));
     return;
   }
+  const editPeriph = event.target.closest("[data-edit-peripheral]");
+  if (editPeriph) {
+    const item = state.peripherals.find((p) => p.id === editPeriph.dataset.editPeripheral);
+    if (item) openPeripheralEdit(item);
+    return;
+  }
+  const addPeriphs = event.target.closest("[data-add-peripherals]");
+  if (addPeriphs) {
+    openPeripheralCatalog(addPeriphs.dataset.addPeripherals);
+    return;
+  }
+  const pickPeriphConsole = event.target.closest("[data-pick-peripheral-console]");
+  if (pickPeriphConsole) {
+    showOfficialStep(pickPeriphConsole.dataset.pickPeripheralConsole);
+    return;
+  }
+  const addOfficial = event.target.closest("[data-add-official]");
+  if (addOfficial) {
+    const spec = officialFor(peripheralConsoleId).find((item) => item.id === addOfficial.dataset.addOfficial);
+    if (spec) addPeripheral({ consoleId: peripheralConsoleId, title: spec.name, officialId: spec.id, search: spec.search });
+    return;
+  }
   const own = event.target.closest("[data-own]");
   if (own) {
-    openGotItDialog(own.dataset.own);
+    const ref = splitOwnRef(own.dataset.own);
+    openGotItDialog(ref.id, ref.kind);
+    return;
+  }
+  const sold = event.target.closest("[data-sold]");
+  if (sold) {
+    const ref = splitOwnRef(sold.dataset.sold);
+    markSold(ref.kind, ref.id);
+    return;
+  }
+  const unsold = event.target.closest("[data-unsold]");
+  if (unsold) {
+    const ref = splitOwnRef(unsold.dataset.unsold);
+    restoreSold(ref.kind, ref.id);
+    return;
+  }
+  const jumpGame = event.target.closest("[data-jump-game]");
+  if (jumpGame) {
+    const game = state.games.find((g) => g.id === jumpGame.dataset.jumpGame);
+    if (game) {
+      setView(game.status === "wishlist" ? "wishlist" : game.status === "sold" ? "sold" : "collection");
+      openGameDetail(game.id);
+    }
+    return;
+  }
+  const jumpPeri = event.target.closest("[data-jump-peripheral]");
+  if (jumpPeri) {
+    const item = state.peripherals.find((p) => p.id === jumpPeri.dataset.jumpPeripheral);
+    if (item) {
+      peripheralStatus = item.status === "wishlist" ? "wishlist" : "owned";
+      setView(item.status === "sold" ? "sold" : "peripherals");
+      openPeripheralDetail(item.id);
+    }
     return;
   }
   const del = event.target.closest("[data-delete]");
   if (del) {
     const id = del.dataset.delete;
+    const snapshot = state.games.find((g) => g.id === id);
+    if (!snapshot) return;
     state.games = state.games.filter((g) => g.id !== id);
-    deleteCoverBlob(id);
     save();
     render();
+    showUndo(`Removed ${snapshot.title}`, () => {
+      state.games.push(snapshot);
+    }, () => deleteCoverBlob(id));
+    return;
+  }
+  const delPeriph = event.target.closest("[data-delete-peripheral]");
+  if (delPeriph) {
+    const id = delPeriph.dataset.deletePeripheral;
+    const snapshot = state.peripherals.find((p) => p.id === id);
+    if (!snapshot) return;
+    state.peripherals = state.peripherals.filter((p) => p.id !== id);
+    save();
+    render();
+    showUndo(`Removed ${snapshot.title}`, () => {
+      state.peripherals.push(snapshot);
+    }, () => deleteCoverBlob(id));
     return;
   }
   const openGame = event.target.closest("[data-open-game]");
   if (openGame && !event.target.closest(".card-actions")) {
     openGameDetail(openGame.dataset.openGame);
+    return;
+  }
+  const openPeripheral = event.target.closest("[data-open-peripheral]");
+  if (openPeripheral && !event.target.closest(".card-actions")) {
+    openPeripheralDetail(openPeripheral.dataset.openPeripheral);
     return;
   }
   const openConsole = event.target.closest("[data-open-console]");
@@ -1248,6 +2232,7 @@ els.gotItConditions?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-condition]");
   if (!btn || !els.gotItForm) return;
   els.gotItForm.elements.condition.value = btn.dataset.condition;
+  applyKitFromCondition(els.gotItForm, btn.dataset.condition);
   els.gotItConditions.querySelectorAll("[data-condition]").forEach((node) => {
     node.classList.toggle("active", node === btn);
   });
@@ -1259,17 +2244,45 @@ els.gotItForm?.addEventListener("submit", (event) => {
   confirmGotIt(condition);
 });
 els.detailEdit?.addEventListener("click", () => {
+  if (detail.kind === "peripheral") {
+    const item = state.peripherals.find((p) => p.id === detail.id);
+    els.detail.close();
+    if (item) openPeripheralEdit(item);
+    return;
+  }
   const game = state.games.find((g) => g.id === detail.id);
   els.detail.close();
   if (game) openGameDialog(game);
 });
 els.detail?.addEventListener("click", (event) => {
   if (event.target.id === "add-copy-btn") {
-    const game = state.games.find((g) => g.id === detail.id);
+    const pool = detail.kind === "peripheral" ? state.peripherals : state.games;
+    const game = pool.find((g) => g.id === detail.id);
     if (!game) return;
     const condition = document.getElementById("copy-condition")?.value || "";
-    game.copies = [...gameCopies(game), { id: uid(), condition, notes: "" }];
+    game.copies = [
+      ...gameCopies(game),
+      migrateCopyItem({
+        condition,
+        region: document.getElementById("copy-region")?.value || "",
+        box: document.getElementById("copy-box")?.checked,
+        manual: document.getElementById("copy-manual")?.checked,
+        inserts: document.getElementById("copy-inserts")?.checked,
+        paidPrice: document.getElementById("copy-paid")?.value,
+        location: document.getElementById("copy-location")?.value.trim() || "",
+      }),
+    ];
     game.status = "owned";
+    save();
+    render();
+    refreshOpenDetail();
+    return;
+  }
+  if (event.target.id === "want-console-btn") {
+    const con = consoleById(detail.id);
+    if (!con) return;
+    con.wanted = !con.wanted;
+    Object.assign(con, syncConsoleOwned(con));
     save();
     render();
     refreshOpenDetail();
@@ -1289,10 +2302,11 @@ els.detail?.addEventListener("click", (event) => {
   }
   const removeCopy = event.target.closest("[data-remove-copy]");
   if (removeCopy) {
-    const game = state.games.find((g) => g.id === detail.id);
+    const pool = detail.kind === "peripheral" ? state.peripherals : state.games;
+    const game = pool.find((g) => g.id === detail.id);
     if (!game) return;
     game.copies = gameCopies(game).filter((c) => c.id !== removeCopy.dataset.removeCopy);
-    if (!game.copies.length) game.status = "wishlist";
+    if (detail.kind !== "peripheral" && !game.copies.length) game.status = "wishlist";
     save();
     render();
     refreshOpenDetail();
@@ -1327,6 +2341,24 @@ document.body.addEventListener("submit", (event) => {
   render();
 });
 
+els.undoBtn?.addEventListener("click", () => {
+  clearTimeout(undoTimer);
+  undoAction?.restore?.();
+  undoAction = null;
+  els.undoToast?.classList.add("hidden");
+  save();
+  render();
+});
+els.peripheralCancel?.addEventListener("click", () => els.peripheralDialog?.close());
+els.peripheralBack?.addEventListener("click", () => showPeripheralConsoleStep());
+els.peripheralCustom?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const title = els.peripheralCustom.elements.title.value.trim();
+  if (!title || !peripheralConsoleId) return;
+  addPeripheral({ consoleId: peripheralConsoleId, title, officialId: "", search: title });
+  els.peripheralCustom.reset();
+});
+
 els.exportBtn?.addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
@@ -1349,6 +2381,7 @@ els.importInput?.addEventListener("change", async () => {
   for (const c of parsed.consoles || []) {
     if (!state.consoles.some((x) => x.id === c.id)) state.consoles.push(migrateConsole(c));
   }
+  state.peripherals = (parsed.peripherals || []).map(migratePeripheral);
   save();
   render();
   els.importInput.value = "";
@@ -1356,6 +2389,7 @@ els.importInput?.addEventListener("change", async () => {
 });
 
 state = load();
+readSavedSort();
 if (state.games.length) save();
 try {
   setView("collection");
