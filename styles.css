@@ -1169,6 +1169,14 @@ menu {
   font-size: 18px;
 }
 
+.market-label {
+  margin: 8px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .finn-deals {
   display: flex;
   flex-direction: column;

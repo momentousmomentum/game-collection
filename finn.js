@@ -39,46 +39,18 @@ function formatNok(value) {
   return `${Math.round(value)} kr`;
 }
 
-function listingLinks(game, row) {
-  if (!row) {
-    return scanning
-      ? `<p class="meta">Looking…</p>`
-      : `<p class="meta">Not checked yet.</p>
-         <a class="ghost finn-link" href="${escapeHtml(defaultSearchUrl(game))}" target="_blank" rel="noopener">Search on FINN</a>`;
+function formatMoney(value, currency) {
+  if (value == null || Number.isNaN(Number(value))) return "";
+  const amount = Number(value);
+  if (currency === "NOK") return formatNok(amount);
+  try {
+    return new Intl.NumberFormat("en", { style: "currency", currency: currency || "USD", maximumFractionDigits: 2 }).format(amount);
+  } catch {
+    return `${amount} ${currency || ""}`.trim();
   }
-  const listings = (row.items || [])
-    .filter((item) => item.url)
-    .slice()
-    .sort((a, b) => (a.price ?? 1e12) - (b.price ?? 1e12));
-  const targetNote =
-    row.maxPrice && listings.some((item) => item.price != null && item.price <= row.maxPrice)
-      ? `<p class="meta">At or under your ${escapeHtml(formatNok(row.maxPrice))} target.</p>`
-      : "";
-  if (!listings.length) {
-    return `
-      <p class="meta">${escapeHtml(row.error || "No listings found.")}</p>
-      ${targetNote}
-      <a class="ghost finn-link" href="${escapeHtml(row.searchUrl || defaultSearchUrl(game))}" target="_blank" rel="noopener">Search on FINN</a>`;
-  }
-  return `
-    ${targetNote}
-    <div class="finn-deals">
-      ${listings
-        .map((item) => {
-          const price = formatNok(item.price) || "See listing";
-          const under = row.maxPrice && item.price != null && item.price <= row.maxPrice ? " under-target" : "";
-          return `
-            <a class="finn-deal${under}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">
-              <strong>${escapeHtml(price)}</strong>
-              <span>${escapeHtml(item.title || "FINN listing")}</span>
-            </a>`;
-        })
-        .join("")}
-    </div>
-    <a class="ghost finn-link" href="${escapeHtml(row.searchUrl || defaultSearchUrl(game))}" target="_blank" rel="noopener">More on FINN</a>`;
 }
 
-function defaultSearchUrl(game) {
+function defaultFinnUrl(game) {
   const q = [game.title, game.consoleName].filter(Boolean).join(" ");
   return `https://www.finn.no/recommerce/forsale/search?${new URLSearchParams({
     q,
@@ -86,14 +58,65 @@ function defaultSearchUrl(game) {
   })}`;
 }
 
+function defaultEbayUrl(game) {
+  const q = [game.title, game.consoleName].filter(Boolean).join(" ");
+  return `https://www.ebay.com/sch/i.html?${new URLSearchParams({
+    _nkw: q,
+    _sacat: "139973",
+    _sop: "15",
+    LH_BIN: "1",
+  })}`;
+}
+
+function marketBlock(game, row, market) {
+  const label = market === "ebay" ? "eBay" : "FINN";
+  const fallback = market === "ebay" ? defaultEbayUrl(game) : defaultFinnUrl(game);
+  const data = row?.[market];
+  if (!data) {
+    return scanning
+      ? `<p class="meta">${escapeHtml(label)}: looking…</p>`
+      : `<a class="ghost finn-link" href="${escapeHtml(fallback)}" target="_blank" rel="noopener">Search on ${escapeHtml(label)}</a>`;
+  }
+  const listings = (data.items || [])
+    .filter((item) => item.url)
+    .slice()
+    .sort((a, b) => (a.price ?? 1e12) - (b.price ?? 1e12));
+  const compareNok = market === "finn" && row.maxPrice;
+  const underNote =
+    compareNok && listings.some((item) => item.price != null && item.price <= row.maxPrice)
+      ? `<p class="meta">At or under your ${escapeHtml(formatNok(row.maxPrice))} target on FINN.</p>`
+      : "";
+  if (!listings.length) {
+    return `
+      <p class="meta">${escapeHtml(label)}: ${escapeHtml(data.error || "No listings found.")}</p>
+      <a class="ghost finn-link" href="${escapeHtml(data.searchUrl || fallback)}" target="_blank" rel="noopener">Search on ${escapeHtml(label)}</a>`;
+  }
+  return `
+    ${underNote}
+    <div class="finn-deals">
+      ${listings
+        .map((item) => {
+          const price = formatMoney(item.price, item.currency || (market === "finn" ? "NOK" : "USD")) || "See listing";
+          const under = compareNok && item.price != null && item.price <= row.maxPrice ? " under-target" : "";
+          return `
+            <a class="finn-deal${under}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">
+              <strong>${escapeHtml(price)}</strong>
+              <span>${escapeHtml(item.title || `${label} listing`)}</span>
+            </a>`;
+        })
+        .join("")}
+    </div>
+    <a class="ghost finn-link" href="${escapeHtml(data.searchUrl || fallback)}" target="_blank" rel="noopener">More on ${escapeHtml(label)}</a>`;
+}
+
 function renderFinn() {
   if (!view) return;
   const wish = wishlistGames();
   view.innerHTML = `
     <div class="deals-head">
-      <p class="meta">Checks FINN Torget (Spill og konsoll) for titles on your wishlist. Collection stays untouched.</p>
+      <p class="meta">Checks FINN Torget and eBay for titles on your wishlist. Collection stays untouched. eBay listings need an App ID under Catalog if eBay blocks anonymous search.</p>
       <button class="primary" id="finn-scan-btn" ${scanning || !wish.length ? "disabled" : ""}>
-        ${scanning ? "Checking FINN…" : "Check wishlist"}
+        ${scanning ? "Checking markets…" : "Check wishlist"}
       </button>
     </div>
     ${
@@ -105,35 +128,30 @@ function renderFinn() {
               return `
                 <article class="finn-row">
                   <h3>${escapeHtml(game.title)}</h3>
-                  <p class="meta">${escapeHtml(game.consoleName)}${game.maxPrice ? ` · target ${escapeHtml(formatNok(game.maxPrice))}` : ""}</p>
-                  ${listingLinks(game, row)}
+                  <p class="meta">${escapeHtml(game.consoleName)}${game.maxPrice ? ` · FINN target ${escapeHtml(formatNok(game.maxPrice))}` : ""}</p>
+                  <p class="market-label">FINN</p>
+                  ${marketBlock(game, row, "finn")}
+                  <p class="market-label">eBay</p>
+                  ${marketBlock(game, row, "ebay")}
                 </article>`;
             })
             .join("")}</div>`
     }`;
 }
 
-async function checkOne(game) {
+async function fetchMarket(path, game) {
   const params = new URLSearchParams({ q: game.title, platform: game.consoleId || "" });
   try {
-    const res = await fetch(`/api/finn?${params}`);
-    const data = await res.json();
-    return {
-      id: game.id,
-      maxPrice: game.maxPrice,
-      items: data.items || [],
-      searchUrl: data.searchUrl,
-      error: data.error,
-    };
+    const res = await fetch(`${path}?${params}`);
+    return await res.json();
   } catch {
-    return {
-      id: game.id,
-      maxPrice: game.maxPrice,
-      items: [],
-      searchUrl: `https://www.finn.no/recommerce/forsale/search?q=${encodeURIComponent(game.title)}&sub_category=1.93.3905`,
-      error: "Could not reach FINN.",
-    };
+    return { items: [], error: "Could not reach the market." };
   }
+}
+
+async function checkOne(game) {
+  const [finn, ebay] = await Promise.all([fetchMarket("/api/finn", game), fetchMarket("/api/ebay", game)]);
+  return { id: game.id, maxPrice: game.maxPrice, finn, ebay };
 }
 
 async function scanWishlist() {

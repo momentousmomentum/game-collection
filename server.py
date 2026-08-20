@@ -305,6 +305,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/finn":
             self.handle_finn(parse_qs(parsed.query))
             return
+        if parsed.path == "/api/ebay":
+            self.handle_ebay(parse_qs(parsed.query))
+            return
         if parsed.path == "/api/image":
             self.handle_image(parse_qs(parsed.query))
             return
@@ -420,12 +423,21 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response(502, {"error": "Could not load info.", "extract": "", "title": q, "url": "", "cover": None})
 
     def handle_settings_get(self) -> None:
+        rawg = False
+        ebay = False
         try:
             from catalog import rawg_configured
 
-            self.json_response(200, {"rawg": rawg_configured()})
+            rawg = rawg_configured()
         except Exception:
-            self.json_response(200, {"rawg": False})
+            rawg = False
+        try:
+            from ebay import ebay_app_id
+
+            ebay = bool(ebay_app_id())
+        except Exception:
+            ebay = False
+        self.json_response(200, {"rawg": rawg, "ebay": ebay})
 
     def handle_settings_post(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
@@ -434,12 +446,18 @@ class Handler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             self.json_response(400, {"error": "Bad JSON."})
             return
-        key = str(body.get("rawg_key") or "").strip()
+        data = {}
+        if "rawg_key" in body:
+            data["rawg_key"] = str(body.get("rawg_key") or "").strip()
+        if "ebay_app_id" in body:
+            data["ebay_app_id"] = str(body.get("ebay_app_id") or "").strip()
         try:
-            from catalog import save_config
+            from catalog import save_config, rawg_configured
+            from ebay import ebay_app_id
 
-            save_config({"rawg_key": key})
-            self.json_response(200, {"rawg": bool(key)})
+            if data:
+                save_config(data)
+            self.json_response(200, {"rawg": rawg_configured(), "ebay": bool(ebay_app_id())})
         except OSError as exc:
             print(f"settings error: {exc}", flush=True)
             self.json_response(500, {"error": "Could not save key."})
@@ -508,6 +526,26 @@ class Handler(SimpleHTTPRequestHandler):
                 {"q": q, "sub_category": "1.93.3905"}
             )
             self.json_response(502, {"error": "Could not reach FINN.", "items": [], "searchUrl": fallback})
+
+    def handle_ebay(self, query: dict[str, list[str]]) -> None:
+        q = (query.get("q") or [""])[0].strip()
+        platform = (query.get("platform") or [""])[0].strip()
+        fallback = "https://www.ebay.com/sch/i.html?" + urlencode({"_nkw": q or "video games", "_sacat": "139973"})
+        if len(q) < 2:
+            self.json_response(400, {"error": "Need a title.", "items": [], "searchUrl": fallback})
+            return
+        try:
+            from ebay import search_ebay
+        except Exception as exc:
+            print(f"ebay import error: {exc}", flush=True)
+            self.json_response(502, {"error": "eBay checker unavailable.", "items": [], "searchUrl": fallback})
+            return
+        try:
+            payload = search_ebay(q, platform, limit=5)
+            self.json_response(200, payload)
+        except Exception as exc:
+            print(f"ebay error: {exc}", flush=True)
+            self.json_response(502, {"error": "Could not reach eBay.", "items": [], "searchUrl": fallback})
 
     def handle_image(self, query: dict[str, list[str]]) -> None:
         raw = (query.get("u") or [""])[0]

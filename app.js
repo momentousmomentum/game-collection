@@ -112,7 +112,7 @@ const copy = {
   collection: { title: "Games collection", eyebrow: "Your copies" },
   wishlist: { title: "Games wishlist", eyebrow: "Still hunting" },
   sold: { title: "Sold / traded", eyebrow: "No longer on the shelf" },
-  finn: { title: "FINN", eyebrow: "Wishlist on Torget" },
+  finn: { title: "FINN / eBay", eyebrow: "Wishlist on the market" },
   consoles: { title: "Console Collection", eyebrow: "What you own" },
   peripherals: { title: "Peripherals collection", eyebrow: "Pads, cameras, multitaps" },
 };
@@ -1962,9 +1962,13 @@ els.catalogBtn?.addEventListener("click", async () => {
   try {
     const data = await (await fetch("/api/settings")).json();
     if (els.catalogStatus) {
-      els.catalogStatus.textContent = data.rawg
+      const rawg = data.rawg
         ? "RAWG is connected. Title search will use the games database."
         : "No RAWG key yet — search still uses Wikipedia until you save one.";
+      const ebay = data.ebay
+        ? " eBay App ID is saved for wishlist listings."
+        : " eBay listings work best with an App ID; search links still work without one.";
+      els.catalogStatus.textContent = rawg + ebay;
     }
   } catch {
     if (els.catalogStatus) els.catalogStatus.textContent = "Could not read catalog settings.";
@@ -1974,11 +1978,21 @@ els.catalogBtn?.addEventListener("click", async () => {
 els.catalogCancel?.addEventListener("click", () => els.catalogDialog.close());
 els.catalogForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const payload = {};
   const rawg_key = els.catalogForm.elements.rawgKey.value.trim();
+  const ebay_app_id = els.catalogForm.elements.ebayAppId?.value.trim() || "";
+  if (rawg_key) payload.rawg_key = rawg_key;
+  if (ebay_app_id) payload.ebay_app_id = ebay_app_id;
+  if (!Object.keys(payload).length) {
+    if (els.catalogStatus) {
+      els.catalogStatus.textContent = "Nothing to save — leave a field blank to keep the key you already have.";
+    }
+    return;
+  }
   const res = await fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rawg_key }),
+    body: JSON.stringify(payload),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -1986,9 +2000,13 @@ els.catalogForm?.addEventListener("submit", async (event) => {
     return;
   }
   if (els.catalogStatus) {
-    els.catalogStatus.textContent = data.rawg ? "Saved. Try adding a game — matches should be actual titles." : "Key cleared. Search falls back to Wikipedia.";
+    const bits = [];
+    if (payload.rawg_key) bits.push(data.rawg ? "RAWG saved." : "RAWG not saved.");
+    if (payload.ebay_app_id) bits.push(data.ebay ? "eBay App ID saved." : "eBay App ID not saved.");
+    els.catalogStatus.textContent = bits.join(" ");
   }
   els.catalogForm.elements.rawgKey.value = "";
+  if (els.catalogForm.elements.ebayAppId) els.catalogForm.elements.ebayAppId.value = "";
   infoCache.clear();
 });
 els.form.elements.status.addEventListener("change", () => {

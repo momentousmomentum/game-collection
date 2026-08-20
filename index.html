@@ -26,7 +26,7 @@
           <button type="button" data-view="collection" class="active">Games collection</button>
           <button type="button" data-view="wishlist">Games wishlist</button>
           <button type="button" data-view="sold">Sold / traded</button>
-          <button type="button" data-view="finn">FINN</button>
+          <button type="button" data-view="finn">FINN / eBay</button>
           <button type="button" data-view="consoles">Console Collection</button>
           <button type="button" data-view="peripherals">Peripherals collection</button>
           <button type="button" id="catalog-btn">Catalog</button>
@@ -172,11 +172,15 @@
     <dialog id="catalog-dialog">
       <form id="catalog-form">
         <h2>Game catalog</h2>
-        <p class="meta">Wikipedia is a general encyclopedia, so title matches are messy. RAWG is a games database. Get a free key at <a href="https://rawg.io/apidocs" target="_blank" rel="noopener">rawg.io/apidocs</a>, then paste it here.</p>
+        <p class="meta">Wikipedia is a general encyclopedia, so title matches are messy. RAWG is a games database. Get a free key at <a href="https://rawg.io/apidocs" target="_blank" rel="noopener">rawg.io/apidocs</a>. eBay listing checks use a free App ID from <a href="https://developer.ebay.com/" target="_blank" rel="noopener">developer.ebay.com</a> (Finding API). Leave a field blank to keep the key you already saved.</p>
         <p class="meta" id="catalog-status"></p>
         <label>
           RAWG API key
           <input name="rawgKey" type="password" autocomplete="off" placeholder="Paste key" />
+        </label>
+        <label>
+          eBay App ID
+          <input name="ebayAppId" type="password" autocomplete="off" placeholder="Optional — for wishlist listings" />
         </label>
         <menu>
           <button type="button" id="catalog-cancel" class="ghost">Close</button>

@@ -18,7 +18,7 @@ DATA_FILES = [
     "finn.js",
     "recover.html",
 ]
-HIDDEN = ["catalog", "finn", "paths"]
+HIDDEN = ["catalog", "finn", "ebay", "paths"]
 if sys.platform == "win32":
     HIDDEN.append("webview.platforms.edgechromium")
 elif sys.platform == "darwin":
