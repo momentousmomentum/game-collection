@@ -1,6 +1,6 @@
 # Virtual shelf
 
-A local web app for a **physical video game collection**: games, wishlist, consoles, peripherals, covers, longplays, and FINN checks. The shelf is a black Kallax-style grid with 3D cases. Your library stays in the browser (localStorage) — this repo ships **empty**.
+A local web app for a **physical video game collection**: games, wishlist, consoles, peripherals, covers, and more. The virtual shelf is a dark grid with faux 3D cases. Your library stays in the browser (localStorage) — this repo ships **empty**.
 
 ## Run it
 
@@ -30,4 +30,4 @@ Wikipedia works without a key. For a proper games catalog, get a free key at [ra
 - Local backups (`userdata/`)
 - Built Windows/macOS/Linux binaries (`dist/`)
 
-Export/Import in the sidebar if you want to move a shelf between browsers.
+Export/Import in the sidebar if you want to move a shelf between browsers, or sharing with others.
