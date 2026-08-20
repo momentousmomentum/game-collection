@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Virtual shelf</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Outfit:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="rail">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <strong>Virtual shelf</strong>
+            <p>Physical copies</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <button type="button" data-view="collection" class="active">Collection</button>
+          <button type="button" data-view="wishlist">Wishlist</button>
+          <button type="button" data-view="finn">FINN</button>
+          <button type="button" data-view="consoles">Consoles</button>
+          <button type="button" id="catalog-btn">Catalog</button>
+        </nav>
+        <div class="rail-foot">
+          <button type="button" id="export-btn" class="ghost">Export</button>
+          <label class="ghost file-btn">
+            Import
+            <input id="import-input" type="file" accept="application/json" hidden />
+          </label>
+        </div>
+      </aside>
+
+      <main class="stage">
+        <header class="top">
+          <div>
+            <p class="eyebrow" id="eyebrow">Your copies</p>
+            <h1 id="page-title">Collection</h1>
+          </div>
+          <div class="top-actions">
+            <input id="search" type="search" placeholder="Search titles…" />
+            <button id="fill-covers-btn" class="ghost">Fetch covers</button>
+            <button id="add-btn" class="primary">Add game</button>
+          </div>
+        </header>
+
+        <section id="view-collection" class="view"></section>
+        <section id="view-wishlist" class="view hidden"></section>
+        <section id="view-finn" class="view hidden"></section>
+        <section id="view-consoles" class="view hidden"></section>
+      </main>
+    </div>
+
+    <dialog id="game-dialog">
+      <form id="game-form" method="dialog">
+        <h2 id="dialog-title">Add a game</h2>
+        <div class="cover-field">
+          <img id="cover-preview" class="empty-cover" alt="Cover preview" />
+          <div class="cover-actions">
+            <input type="hidden" name="coverUrl" />
+            <input type="hidden" name="catalogSlug" />
+            <label class="ghost file-btn">
+              Upload cover
+              <input id="cover-file" type="file" accept="image/*" hidden />
+            </label>
+            <button type="button" id="cover-clear" class="ghost">Remove</button>
+          </div>
+        </div>
+        <label class="title-search">
+          Title
+          <input name="title" required maxlength="160" placeholder="Start typing a title…" autocomplete="off" />
+          <div id="search-results" class="search-results hidden"></div>
+        </label>
+        <div class="picker-block">
+          <span>Console</span>
+          <input type="hidden" name="consoleId" required />
+          <div id="console-picker" class="console-picker"></div>
+        </div>
+        <fieldset class="row">
+          <label>
+            Status
+            <select name="status">
+              <option value="owned">Owned</option>
+              <option value="wishlist">Wishlist</option>
+            </select>
+          </label>
+          <label>
+            Condition
+            <select name="condition">
+              <option value="">—</option>
+              <option value="sealed">Sealed</option>
+              <option value="cib">CIB</option>
+              <option value="loose">Loose</option>
+              <option value="digital">Digital</option>
+            </select>
+          </label>
+        </fieldset>
+        <label>
+          Target price (wishlist)
+          <input name="maxPrice" type="number" min="0" step="0.01" placeholder="Optional" />
+        </label>
+        <label>
+          Notes
+          <textarea name="notes" rows="3" maxlength="400" placeholder="Variant, region, missing manual…"></textarea>
+        </label>
+        <menu>
+          <button value="cancel" type="button" id="dialog-cancel" class="ghost">Cancel</button>
+          <button value="default" class="primary">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="detail-dialog">
+      <div class="detail">
+        <header class="detail-head">
+          <img id="detail-cover" alt="" />
+          <div>
+            <h2 id="detail-title">Details</h2>
+            <p class="meta" id="detail-sub"></p>
+          </div>
+        </header>
+        <section class="detail-about" id="detail-about"></section>
+        <section id="detail-copies"></section>
+        <menu>
+          <button type="button" id="detail-edit" class="ghost hidden">Edit</button>
+          <button type="button" id="detail-close" class="primary">Close</button>
+        </menu>
+      </div>
+    </dialog>
+
+    <dialog id="catalog-dialog">
+      <form id="catalog-form">
+        <h2>Game catalog</h2>
+        <p class="meta">Wikipedia is a general encyclopedia, so title matches are messy. RAWG is a games database. Get a free key at <a href="https://rawg.io/apidocs" target="_blank" rel="noopener">rawg.io/apidocs</a>, then paste it here.</p>
+        <p class="meta" id="catalog-status"></p>
+        <label>
+          RAWG API key
+          <input name="rawgKey" type="password" autocomplete="off" placeholder="Paste key" />
+        </label>
+        <menu>
+          <button type="button" id="catalog-cancel" class="ghost">Close</button>
+          <button class="primary">Save key</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="got-it-dialog">
+      <form id="got-it-form">
+        <p class="eyebrow">Off the wishlist</p>
+        <h2>Got it</h2>
+        <p class="meta" id="got-it-title"></p>
+        <p class="meta">What condition is this copy in?</p>
+        <input type="hidden" name="condition" value="cib" />
+        <div id="got-it-conditions" class="condition-picks" role="group" aria-label="Condition">
+          <button type="button" class="chip" data-condition="">Unspecified</button>
+          <button type="button" class="chip" data-condition="sealed">Sealed</button>
+          <button type="button" class="chip active" data-condition="cib">CIB</button>
+          <button type="button" class="chip" data-condition="loose">Loose</button>
+          <button type="button" class="chip" data-condition="digital">Digital</button>
+        </div>
+        <menu>
+          <button type="button" id="got-it-cancel" class="ghost">Not yet</button>
+          <button class="primary">Add to shelf</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <div id="fireworks" class="fireworks hidden" aria-hidden="true"></div>
+    <script type="module" src="/app.js"></script>
+    <script type="module" src="/finn.js"></script>
+  </body>
+</html>

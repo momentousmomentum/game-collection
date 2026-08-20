@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Restore Game Shelf</title>
+    <style>
+      body {
+        font-family: Segoe UI, sans-serif;
+        background: #16130f;
+        color: #f4eee6;
+        max-width: 720px;
+        margin: 48px auto;
+        padding: 0 20px;
+        line-height: 1.5;
+      }
+      pre {
+        white-space: pre-wrap;
+        background: #1e1a15;
+        padding: 16px;
+        border-radius: 12px;
+      }
+      button,
+      a {
+        font: inherit;
+        color: #2a1c14;
+        background: #e4a078;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 14px;
+        text-decoration: none;
+        display: inline-block;
+        margin: 8px 8px 0 0;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Restore Game Shelf</h1>
+    <p id="status">Checking this browser’s saved shelf…</p>
+    <pre id="detail"></pre>
+    <p>
+      <button type="button" id="restore">Restore backup</button>
+      <a href="/">Back to the shelf</a>
+    </p>
+    <script>
+      const KEY = "game-shelf-v1";
+      const BACKUP = KEY + "-backup";
+      const status = document.getElementById("status");
+      const detail = document.getElementById("detail");
+
+      function read(key) {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw ? JSON.parse(raw) : null;
+        } catch (err) {
+          return { error: String(err) };
+        }
+      }
+
+      function summarize(data, label) {
+        if (!data) return label + ": nothing saved";
+        if (data.error) return label + ": " + data.error;
+        const games = Array.isArray(data.games) ? data.games : [];
+        const owned = games.filter((g) => g.status === "owned").length;
+        const wish = games.filter((g) => g.status === "wishlist").length;
+        const titles = games.slice(0, 12).map((g) => g.title).join("\n");
+        return (
+          label +
+          ": " +
+          games.length +
+          " games (" +
+          owned +
+          " owned, " +
+          wish +
+          " wishlist)\n" +
+          (titles ? titles + (games.length > 12 ? "\n…" : "") : "")
+        );
+      }
+
+      function refresh() {
+        const current = read(KEY);
+        const backup = read(BACKUP);
+        status.textContent =
+          (current && current.games && current.games.length) ||
+          (backup && backup.games && backup.games.length)
+            ? "A copy was found in this browser."
+            : "No shelf data in this browser profile. If you used a different browser or http://localhost instead of http://127.0.0.1, open this page there.";
+        detail.textContent = summarize(current, "Current") + "\n\n" + summarize(backup, "Backup");
+      }
+
+      document.getElementById("restore").onclick = function () {
+        const backup = read(BACKUP);
+        if (!backup || !backup.games || !backup.games.length) {
+          status.textContent = "There is no backup to restore in this browser.";
+          return;
+        }
+        localStorage.setItem(KEY, JSON.stringify(backup));
+        refresh();
+        status.textContent = "Backup restored. Open the shelf next.";
+      };
+
+      refresh();
+    </script>
+  </body>
+</html>
