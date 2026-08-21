@@ -299,11 +299,11 @@ def normalize_locale(value: str) -> str:
     return key if key in MARKETS else "auto"
 
 
-def resolve_market(locale: str = "auto", accept_language: str = "") -> dict:
+def resolve_market(locale: str = "auto", accept_language: str = "") -> dict | None:
     key = normalize_locale(locale)
     if key == "auto":
-        key = infer_locale(accept_language)
-    return MARKETS.get(key) or MARKETS["us"]
+        return None
+    return MARKETS.get(key)
 
 
 def query_with_platform(query: str, platform: str) -> str:
@@ -311,7 +311,9 @@ def query_with_platform(query: str, platform: str) -> str:
     return " ".join(part for part in (query, hint) if part).strip()
 
 
-def classifieds_search_url(market: dict, query: str) -> str:
+def classifieds_search_url(market: dict | None, query: str) -> str:
+    if not market:
+        return ""
     site = market.get("classifieds") or {}
     if not site:
         return ""
@@ -323,7 +325,11 @@ def classifieds_search_url(market: dict, query: str) -> str:
     return template.replace("{q}", quote(query))
 
 
-def ebay_search_url(market: dict, query: str, rss: bool = False) -> str:
+def ebay_search_url(market: dict | None, query: str, rss: bool = False) -> str:
+    if not market:
+        return "https://www.ebay.com/sch/i.html?" + urlencode(
+            {"_nkw": query, "_sacat": EBAY_GAMES, "_sop": "15", "LH_BIN": "1"}
+        )
     ebay = market["ebay"]
     params = {"_nkw": query, "_sacat": ebay.get("category") or EBAY_GAMES, "_sop": "15", "LH_BIN": "1"}
     if rss:
@@ -350,8 +356,9 @@ def market_choices() -> list[dict]:
     rows = []
     for item in MARKETS.values():
         site = item.get("classifieds")
-        label = f"{item['name']} ({item['currency']})"
         if site:
-            label += f" — {site['name']}"
+            label = f"{site['name']} — {item['name']} ({item['currency']})"
+        else:
+            label = f"eBay — {item['name']} ({item['currency']})"
         rows.append({"id": item["id"], "label": label, "currency": item["currency"]})
     return rows

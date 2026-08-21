@@ -433,8 +433,8 @@ class Handler(SimpleHTTPRequestHandler):
         return {
             "rawg": rawg_configured(),
             "ebay": bool(ebay_app_id()),
-            "locale": saved,
-            "resolved": public_market(market),
+            "locale": saved if saved != "auto" else "",
+            "resolved": public_market(market) if market else None,
             "markets": market_choices(),
         }
 

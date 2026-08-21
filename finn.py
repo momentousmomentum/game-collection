@@ -71,6 +71,8 @@ def _parse_listings(html: str, limit: int, fallback_currency: str) -> list[dict]
 def search_classifieds(query: str, platform: str, locale: str = "auto", accept_language: str = "", limit: int = 5) -> dict:
     market = resolve_market(locale, accept_language)
     q = query_with_platform(query, platform)
+    if not market:
+        return {"query": q, "searchUrl": "", "items": [], "market": None, "error": "Pick a market first."}
     url = classifieds_search_url(market, q)
     site = market.get("classifieds")
     payload = {"query": q, "searchUrl": url, "items": [], "market": public_market(market)}

@@ -87,10 +87,12 @@ h2,
 }
 
 .brand-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: linear-gradient(155deg, #f0c57e, #c48a3e 55%, var(--teal));
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #0b1a3a;
 }
 
 .brand p {
@@ -1145,6 +1147,18 @@ menu {
   align-items: center;
   margin-bottom: 16px;
   flex-wrap: wrap;
+}
+
+.market-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.market-picker select {
+  min-width: 240px;
 }
 
 .finn-list {

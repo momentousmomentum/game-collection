@@ -17,6 +17,7 @@ DATA_FILES = [
     "logos.js",
     "finn.js",
     "recover.html",
+    "favicon.png",
 ]
 HIDDEN = ["catalog", "finn", "ebay", "markets", "paths"]
 if sys.platform == "win32":

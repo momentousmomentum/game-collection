@@ -112,29 +112,28 @@ const copy = {
   collection: { title: "Games collection", eyebrow: "Your copies" },
   wishlist: { title: "Games wishlist", eyebrow: "Still hunting" },
   sold: { title: "Sold / traded", eyebrow: "No longer on the shelf" },
-  finn: { title: "Markets", eyebrow: "Wishlist on the market" },
+  finn: { title: "Market", eyebrow: "Wishlist listings" },
   consoles: { title: "Console Collection", eyebrow: "What you own" },
   peripherals: { title: "Peripherals collection", eyebrow: "Pads, cameras, multitaps" },
 };
 
-let marketPrefs = { locale: "auto", currency: "USD", display: undefined, classifiedsName: "" };
+let marketPrefs = { locale: "", currency: "", display: undefined, classifiedsName: "" };
 
 function applyMarketSettings(data) {
   const resolved = data?.resolved || {};
   marketPrefs = {
-    locale: data?.locale || "auto",
-    currency: resolved.currency || "USD",
+    locale: data?.locale || "",
+    currency: resolved.currency || marketPrefs.currency || "",
     display: resolved.display,
     classifiedsName: resolved.classifieds?.name || "",
   };
-  const navLabel = marketPrefs.classifiedsName ? `${marketPrefs.classifiedsName} / eBay` : "eBay";
-  copy.finn = { title: navLabel, eyebrow: "Wishlist on the market" };
+  copy.finn = { title: "Market", eyebrow: "Wishlist listings" };
   document.querySelectorAll('.nav [data-view="finn"]').forEach((btn) => {
-    btn.textContent = navLabel;
+    btn.textContent = "Market";
   });
   if (els.title && view === "finn") els.title.textContent = copy.finn.title;
   if (els.eyebrow && view === "finn") els.eyebrow.textContent = copy.finn.eyebrow;
-  document.dispatchEvent(new CustomEvent("shelf:market", { detail: resolved }));
+  document.dispatchEvent(new CustomEvent("shelf:market", { detail: { ...data, resolved } }));
   if (typeof state !== "undefined" && state) render();
 }
 
@@ -394,7 +393,8 @@ function kitLabel(item) {
 
 function money(value, currency) {
   if (value == null || value === "" || Number.isNaN(Number(value))) return "";
-  const code = currency || marketPrefs.currency || "USD";
+  const code = currency || marketPrefs.currency;
+  if (!code) return Number(value).toFixed(Number(value) % 1 ? 2 : 0);
   try {
     return new Intl.NumberFormat(marketPrefs.display || undefined, {
       style: "currency",
@@ -1994,11 +1994,11 @@ els.catalogBtn?.addEventListener("click", async () => {
     applyMarketSettings(data);
     const select = els.catalogForm?.elements.locale;
     if (select) {
-      const current = data.locale || "auto";
-      select.innerHTML = `<option value="auto">Detect from this browser</option>${(data.markets || [])
+      const current = data.locale || "";
+      select.innerHTML = `<option value="">Choose a market</option>${(data.markets || [])
         .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`)
         .join("")}`;
-      select.value = [...select.options].some((opt) => opt.value === current) ? current : "auto";
+      select.value = [...select.options].some((opt) => opt.value === current) ? current : "";
     }
     if (els.catalogStatus) {
       const place = data.resolved
@@ -2459,3 +2459,7 @@ fetch("/api/settings")
   .then((res) => res.json())
   .then(applyMarketSettings)
   .catch(() => {});
+
+document.addEventListener("shelf:market-saved", (event) => {
+  if (event.detail) applyMarketSettings(event.detail);
+});

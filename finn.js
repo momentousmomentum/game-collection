@@ -1,11 +1,15 @@
 const STORAGE_KEY = "game-shelf-v1";
+const LOCALE_KEY = "game-shelf-market";
 const view = document.getElementById("view-finn");
 
 let scanning = false;
 let rows = [];
+let locale = "";
+let choices = [];
 let market = {
-  currency: "USD",
-  display: "en",
+  id: "",
+  currency: "",
+  display: undefined,
   classifieds: null,
   ebay: { name: "eBay", host: "www.ebay.com", currency: "USD" },
 };
@@ -42,7 +46,8 @@ function wishlistGames() {
 
 function formatMoney(value, currency) {
   if (value == null || Number.isNaN(Number(value))) return "";
-  const code = currency || market.currency || "USD";
+  const code = currency || market.currency;
+  if (!code) return `${Number(value)}`;
   try {
     return new Intl.NumberFormat(market.display || undefined, {
       style: "currency",
@@ -142,28 +147,63 @@ function marketBlock(game, row, kind) {
     <a class="ghost finn-link" href="${escapeHtml(data.searchUrl || fallback)}" target="_blank" rel="noopener">More on ${escapeHtml(label)}</a>`;
 }
 
+function pickerHtml() {
+  const selected = market.id || locale || "";
+  return `
+    <label class="market-picker">
+      Market
+      <select id="market-locale">
+        <option value="">Choose a market</option>
+        ${choices
+          .map(
+            (item) =>
+              `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`
+          )
+          .join("")}
+      </select>
+    </label>`;
+}
+
+function applySettings(data) {
+  if (!data) return;
+  choices = data.markets || choices;
+  locale = data.locale || "";
+  if (data.resolved?.id) {
+    market = data.resolved;
+    locale = data.resolved.id;
+  } else if (!locale) {
+    market = { ...market, id: "", classifieds: null, currency: "" };
+  }
+}
+
 function renderFinn() {
   if (!view) return;
   const wish = wishlistGames();
+  const picked = Boolean(market.id);
   const localName = market.classifieds?.name;
-  const intro = localName
-    ? `Checks ${localName} and eBay for titles on your wishlist, in ${market.currency}. Collection stays untouched. eBay listings need an App ID under Catalog if eBay blocks anonymous search. Pick your country under Catalog.`
-    : `Checks eBay for titles on your wishlist, in ${market.currency}. There is no FINN-style classifieds site for this country. Pick your country under Catalog.`;
+  const intro = !picked
+    ? "Pick FINN, Blocket, Tori, DBA, or another market. Shelf prices follow that currency."
+    : localName
+      ? `Checks ${localName} and eBay for wishlist titles, in ${market.currency}. Collection stays untouched.`
+      : `Checks eBay for wishlist titles, in ${market.currency}. Collection stays untouched.`;
   view.innerHTML = `
     <div class="deals-head">
+      ${pickerHtml()}
       <p class="meta">${escapeHtml(intro)}</p>
-      <button class="primary" id="finn-scan-btn" ${scanning || !wish.length ? "disabled" : ""}>
-        ${scanning ? "Checking markets…" : "Check wishlist"}
+      <button class="primary" id="finn-scan-btn" ${scanning || !wish.length || !picked ? "disabled" : ""}>
+        ${scanning ? "Checking market…" : "Check wishlist"}
       </button>
     </div>
     ${
-      !wish.length
-        ? `<div class="empty">Add games to the wishlist first.</div>`
-        : `<div class="finn-list">${wish
-            .map((game) => {
-              const row = rows.find((r) => r.id === game.id);
-              const name = classifiedsName(row);
-              return `
+      !picked
+        ? `<div class="empty">Choose a market above — FINN for Norway, Blocket for Sweden, and so on.</div>`
+        : !wish.length
+          ? `<div class="empty">Add games to the wishlist first.</div>`
+          : `<div class="finn-list">${wish
+              .map((game) => {
+                const row = rows.find((r) => r.id === game.id);
+                const name = classifiedsName(row);
+                return `
                 <article class="finn-row">
                   <h3>${escapeHtml(game.title)}</h3>
                   <p class="meta">${escapeHtml(game.consoleName)}${game.maxPrice ? ` · target ${escapeHtml(formatMoney(game.maxPrice, market.currency))}` : ""}</p>
@@ -175,13 +215,13 @@ function renderFinn() {
                   <p class="market-label">eBay</p>
                   ${marketBlock(game, row, "ebay")}
                 </article>`;
-            })
-            .join("")}</div>`
+              })
+              .join("")}</div>`
     }`;
 }
 
 async function fetchMarket(path, game) {
-  const params = new URLSearchParams({ q: game.title, platform: game.consoleId || "", locale: market.id || "auto" });
+  const params = new URLSearchParams({ q: game.title, platform: game.consoleId || "", locale: market.id || locale });
   try {
     const res = await fetch(`${path}?${params}`);
     return await res.json();
@@ -196,7 +236,7 @@ async function checkOne(game) {
 }
 
 async function scanWishlist() {
-  if (scanning) return;
+  if (scanning || !market.id) return;
   const wish = wishlistGames();
   if (!wish.length) return;
   scanning = true;
@@ -210,10 +250,45 @@ async function scanWishlist() {
   renderFinn();
 }
 
+async function saveLocale(next) {
+  locale = next;
+  try {
+    localStorage.setItem(LOCALE_KEY, next);
+  } catch {
+    /* ignore */
+  }
+  rows = [];
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locale: next || "auto" }),
+    });
+    const data = await res.json();
+    applySettings(data);
+    document.dispatchEvent(new CustomEvent("shelf:market-saved", { detail: data }));
+  } catch {
+    market = { ...market, id: next };
+  }
+  renderFinn();
+}
+
 async function loadMarket() {
   try {
     const data = await (await fetch("/api/settings")).json();
-    if (data.resolved) market = data.resolved;
+    applySettings(data);
+    if (!data.locale) {
+      let stored = "";
+      try {
+        stored = localStorage.getItem(LOCALE_KEY) || "";
+      } catch {
+        stored = "";
+      }
+      if (stored) {
+        await saveLocale(stored);
+        return;
+      }
+    }
   } catch {
     /* keep last known market */
   }
@@ -226,7 +301,10 @@ document.addEventListener("shelf:view", (event) => {
 });
 
 document.addEventListener("shelf:market", (event) => {
-  if (event.detail) market = event.detail;
+  const data = event.detail;
+  if (!data) return;
+  if (data.markets || data.resolved || "locale" in data) applySettings(data);
+  else if (data.id) market = data;
   renderFinn();
 });
 
@@ -235,4 +313,9 @@ document.body.addEventListener("click", (event) => {
     event.preventDefault();
     scanWishlist();
   }
+});
+
+document.body.addEventListener("change", (event) => {
+  if (event.target.id !== "market-locale") return;
+  saveLocale(event.target.value);
 });

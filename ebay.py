@@ -141,6 +141,8 @@ def _from_finding(query: str, market: dict, limit: int) -> list[dict]:
 def search_ebay(query: str, platform: str, locale: str = "auto", accept_language: str = "", limit: int = 5) -> dict:
     market = resolve_market(locale, accept_language)
     q = query_with_platform(query, platform)
+    if not market:
+        return {"query": q, "searchUrl": ebay_search_url(None, q), "items": [], "market": None, "error": "Pick a market first."}
     html_url = ebay_search_url(market, q)
     lang = market.get("display") or "en"
     fallback_currency = market["ebay"]["currency"]
