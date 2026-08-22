@@ -116,6 +116,7 @@ def wiki_search(terms: str) -> list[dict]:
                 "title": hit["title"].replace(" (video game)", ""),
                 "subtitle": page.get("description") or "",
                 "cover": thumb,
+                "images": [thumb] if thumb else [],
             }
         )
     return results
@@ -352,16 +353,32 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response(200, {"cover": None, "error": "Cover lookup failed."})
 
     def lookup_games(self, q: str, platform: str) -> tuple[list, str]:
+        items = []
+        source = "wikipedia"
         try:
             from catalog import rawg_configured, search_rawg
 
             if rawg_configured():
                 items = search_rawg(q, platform)
                 if items:
-                    return items, "rawg"
+                    source = "rawg"
         except Exception as exc:
             print(f"rawg search error: {exc}", flush=True)
-        return search_wikipedia(q, platform), "wikipedia"
+        wiki = search_wikipedia(q, platform)
+        seen = {str(url) for item in items for url in (item.get("images") or [item.get("cover")]) if url}
+        extra = []
+        for hit in wiki:
+            cover = hit.get("cover")
+            if not cover or cover in seen:
+                continue
+            seen.add(cover)
+            extra.append(hit)
+        combined = extra + items
+        if extra and items:
+            source = "mixed"
+        elif extra and not items:
+            source = "wikipedia"
+        return combined, source
 
     def handle_longplay(self, query: dict[str, list[str]]) -> None:
         q = (query.get("q") or [""])[0].strip()

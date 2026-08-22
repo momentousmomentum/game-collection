@@ -3,6 +3,27 @@ import { officialFor } from "./peripherals.js";
 
 const STORAGE_KEY = "game-shelf-v1";
 const COVER_DB = "game-shelf-covers";
+const THEME_KEY = "game-shelf-theme";
+const THEMES = [
+  { id: "shelf", name: "Shelf", swatches: ["#101218", "#e3b46a", "#6cbcab"] },
+  { id: "snes", name: "SNES", light: true, swatches: ["#8a8a92", "#b49ae0", "#5a3d8a"] },
+  { id: "snes-pal", name: "SNES PAL", light: true, swatches: ["#8a8a90", "#ce3a3a", "#e8c547", "#3d9a4a", "#2f6fd6"] },
+  { id: "mastersystem", name: "Master System", swatches: ["#0a0809", "#a33b4c", "#5c2230"] },
+  { id: "ps1", name: "PlayStation", light: true, swatches: ["#c5c5c8", "#df0024", "#f3c300", "#00ac9f", "#2e6db4"] },
+  { id: "ps2", name: "PlayStation 2", swatches: ["#000000", "#4a90e2", "#1a3a8a"] },
+  { id: "ps3", name: "PlayStation 3", swatches: ["#050506", "#c8c8cc", "#6e7a88"] },
+  { id: "ps5", name: "PlayStation 5", light: true, swatches: ["#f2f3f5", "#1a1a1c", "#7ec8e3"] },
+  { id: "genesis", name: "Genesis", swatches: ["#0c0c0e", "#c41e3a", "#4a4a50"] },
+  { id: "dreamcast", name: "Dreamcast", light: true, swatches: ["#f4efe8", "#ff7a18", "#e8d5c4"] },
+  { id: "dreamcast-pal", name: "Dreamcast PAL", light: true, swatches: ["#f4efe8", "#3daf2c", "#e03a3a", "#f2c200", "#2a7de1"] },
+  { id: "xbox", name: "Xbox", swatches: ["#0c120c", "#9bf00b", "#3d5c1a"] },
+  { id: "xbox360", name: "Xbox 360", light: true, swatches: ["#f4f4f2", "#9bf00b", "#c8c8c6"] },
+  { id: "xboxone", name: "Xbox One", swatches: ["#0a0a0c", "#107c10", "#3a3a3a"] },
+  { id: "gamecube", name: "GameCube", swatches: ["#3d3480", "#8b7bc8", "#c8c4d4"] },
+  { id: "wii", name: "Wii", light: true, swatches: ["#f3f6f8", "#8ec8e6", "#4aa4d4"] },
+  { id: "n64", name: "Nintendo 64", swatches: ["#3e4044", "#c8102e", "#6b6e74"] },
+  { id: "switch", name: "Switch", swatches: ["#101012", "#e60012", "#00b4eb"] },
+];
 
 const PRESET_CONSOLES = [
   { id: "nes", name: "NES", family: "Nintendo" },
@@ -163,6 +184,10 @@ const els = {
   catalogForm: document.getElementById("catalog-form"),
   catalogCancel: document.getElementById("catalog-cancel"),
   catalogStatus: document.getElementById("catalog-status"),
+  themeMenu: document.getElementById("theme-menu"),
+  themeBtn: document.getElementById("theme-btn"),
+  themePanel: document.getElementById("theme-panel"),
+  themeGrid: document.getElementById("theme-grid"),
   searchResults: document.getElementById("search-results"),
   coverPreview: document.getElementById("cover-preview"),
   coverFile: document.getElementById("cover-file"),
@@ -202,7 +227,8 @@ let view = "collection";
 let consoleFilter = "all";
 let gameSort = { collection: "added", wishlist: "added", sold: "added" };
 let sortReverse = { collection: false, wishlist: false, sold: false };
-let extraFilter = { condition: "all", genre: "all", cover: "all" };
+let extraFilter = { condition: "all", genre: "all", cover: "all", copies: "all" };
+let shelfLayout = "grid";
 let peripheralStatus = "owned";
 let editingId = null;
 let itemKind = "game";
@@ -211,6 +237,7 @@ let pendingCover = null;
 let pendingMeta = { released: "", genres: [] };
 let searchTimer = 0;
 const objectUrls = new Map();
+const localCoverIds = new Set();
 const infoCache = new Map();
 const longplayCache = new Map();
 let detail = { kind: null, id: null };
@@ -532,7 +559,7 @@ function renderPeripheralChips() {
       })
     )
     .join("");
-  return `<div class="toolbar">${statusChips}${chips}</div>`;
+  return `<div class="toolbar">${statusChips}${chips}<button type="button" class="ghost ${shelfLayout === "list" ? "active" : ""}" data-layout-toggle>${shelfLayout === "list" ? "Grid view" : "List view"}</button></div>`;
 }
 
 function sortKeyFor(status) {
@@ -553,13 +580,45 @@ function readSavedSort() {
     if (raw.wishlist) gameSort.wishlist = raw.wishlist;
     if (raw.sold) gameSort.sold = raw.sold;
     if (raw.reverse) sortReverse = { ...sortReverse, ...raw.reverse };
+    if (raw.layout === "list" || raw.layout === "grid") shelfLayout = raw.layout;
   } catch {
     /* ignore */
   }
 }
 
 function writeSavedSort() {
-  localStorage.setItem("game-shelf-sort", JSON.stringify({ ...gameSort, reverse: sortReverse }));
+  localStorage.setItem("game-shelf-sort", JSON.stringify({ ...gameSort, reverse: sortReverse, layout: shelfLayout }));
+}
+
+function currentTheme() {
+  const id = localStorage.getItem(THEME_KEY) || "shelf";
+  return THEMES.some((theme) => theme.id === id) ? id : "shelf";
+}
+
+function applyTheme(id) {
+  const spec = THEMES.find((item) => item.id === id) || THEMES[0];
+  document.documentElement.dataset.theme = spec.id;
+  document.documentElement.dataset.scheme = spec.light ? "light" : "dark";
+  localStorage.setItem(THEME_KEY, spec.id);
+  renderThemeGrid();
+}
+
+function setThemeMenuOpen(open) {
+  els.themePanel?.classList.toggle("hidden", !open);
+  els.themeBtn?.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function renderThemeGrid() {
+  if (!els.themeGrid) return;
+  const active = currentTheme();
+  const current = THEMES.find((theme) => theme.id === active);
+  if (els.themeBtn) els.themeBtn.textContent = current ? `Theme · ${current.name}` : "Theme";
+  els.themeGrid.innerHTML = THEMES.map(
+    (theme) => `<button type="button" class="theme-swatch${theme.id === active ? " active" : ""}" data-theme="${escapeHtml(theme.id)}" role="menuitem" aria-pressed="${theme.id === active}">
+      <span class="theme-dots">${theme.swatches.map((color) => `<i style="background:${color}"></i>`).join("")}</span>
+      <small>${escapeHtml(theme.name)}</small>
+    </button>`
+  ).join("");
 }
 
 function primaryGenre(game) {
@@ -615,6 +674,12 @@ function extraFilters(status) {
         <option value="missing" ${extraFilter.cover === "missing" ? "selected" : ""}>No cover yet</option>
       </select>
     </label>
+    <button type="button" class="ghost ${shelfLayout === "list" ? "active" : ""}" data-layout-toggle>
+      ${shelfLayout === "list" ? "Grid view" : "List view"}
+    </button>
+    <button type="button" class="ghost ${extraFilter.copies === "dupes" ? "active" : ""}" data-copies-filter>
+      Duplicates only
+    </button>
     <button type="button" class="ghost" data-sort-reverse="${sortKeyFor(status)}">${sortReverse[sortKeyFor(status)] ? "Z→A" : "A→Z"}</button>
   `;
 }
@@ -641,7 +706,8 @@ function matchesExtra(game) {
     if (!conditions.includes(extraFilter.condition)) return false;
   }
   if (extraFilter.genre !== "all" && primaryGenre(game) !== extraFilter.genre) return false;
-  if (extraFilter.cover === "missing" && game.coverUrl) return false;
+  if (extraFilter.cover === "missing" && hasCover(game)) return false;
+  if (extraFilter.copies === "dupes" && gameCopies(game).length < 2) return false;
   return true;
 }
 
@@ -662,7 +728,7 @@ function setView(next) {
   if (!copy[next]) return;
   if (view !== next) {
     consoleFilter = "all";
-    extraFilter = { condition: "all", genre: "all", cover: "all" };
+    extraFilter = { condition: "all", genre: "all", cover: "all", copies: "all" };
   }
   view = next;
   els.nav.forEach((btn) => btn.classList.toggle("active", btn.dataset.view === next));
@@ -705,6 +771,45 @@ function coverSrc(url) {
   return `/api/image?u=${encodeURIComponent(url)}`;
 }
 
+function hasCover(item) {
+  return Boolean(item?.coverUrl) || localCoverIds.has(item.id) || objectUrls.has(item.id);
+}
+
+function itemCoverSrc(item) {
+  return objectUrls.get(item.id) || "";
+}
+
+function applyCoverNode(id, src) {
+  if (!src) return;
+  document.querySelectorAll(`[data-cover="${id}"]`).forEach((node) => {
+    if (node.tagName === "IMG") {
+      if (node.getAttribute("src") !== src) node.src = src;
+      return;
+    }
+    const img = document.createElement("img");
+    img.dataset.cover = id;
+    img.src = src;
+    img.alt = "";
+    node.replaceWith(img);
+  });
+}
+
+function coverMarkup(item) {
+  const local = itemCoverSrc(item);
+  const remote = item.coverUrl ? coverSrc(item.coverUrl) : "";
+  const src = local || remote;
+  if (src) return `<img data-cover="${item.id}" src="${src}" alt="">`;
+  return `<div class="cover-fallback" data-cover="${item.id}" style="background:${spineColor(item.consoleId)};aspect-ratio:${coverRatio(item.consoleId)}"></div>`;
+}
+
+function rememberCover(id, blob) {
+  if (!id || !blob) return;
+  const prev = objectUrls.get(id);
+  if (prev) URL.revokeObjectURL(prev);
+  objectUrls.set(id, URL.createObjectURL(blob));
+  localCoverIds.add(id);
+}
+
 function renderChips(status) {
   const used = [...new Set(state.games.filter((g) => g.status === status).map((g) => g.consoleId))];
   const chips = [`<button class="chip ${consoleFilter === "all" ? "active" : ""}" data-filter="all" title="All">All</button>`]
@@ -736,23 +841,102 @@ function cubbyFacts(game) {
   return [year, primaryGenre(game)].filter(Boolean).join(" · ");
 }
 
+function itemOpenAttr(item, kind) {
+  return kind === "peripheral" ? `data-open-peripheral="${item.id}"` : `data-open-game="${item.id}"`;
+}
+
+function itemActions(item, kind = "game") {
+  const editAttr = kind === "peripheral" ? `data-edit-peripheral="${item.id}"` : `data-edit="${item.id}"`;
+  const delAttr = kind === "peripheral" ? `data-delete-peripheral="${item.id}"` : `data-delete="${item.id}"`;
+  const prefix = kind === "peripheral" ? "p:" : "";
+  return `
+    <div class="card-actions">
+      <button class="ghost" ${editAttr}>Edit</button>
+      ${item.status === "wishlist" ? `<button class="ghost" data-own="${prefix}${item.id}">Got it</button>` : ""}
+      ${item.status === "owned" ? `<button class="ghost" data-sold="${prefix}${item.id}">Sold</button>` : ""}
+      ${item.status === "sold" ? `<button class="ghost" data-unsold="${prefix}${item.id}">Back on shelf</button>` : ""}
+      <button class="ghost" ${delAttr}>Remove</button>
+    </div>`;
+}
+
+function groupLabel(item, sort) {
+  if (sort === "console") return consoleById(item.consoleId)?.name || "Other";
+  if (sort === "title") {
+    const letter = (item.title || "").trim().charAt(0).toUpperCase();
+    return /[A-Z]/.test(letter) ? letter : "#";
+  }
+  if (sort === "genre") return primaryGenre(item) || "No genre";
+  if (sort === "released") return (item.released || "").slice(0, 4) || "Unknown year";
+  if (sort === "added") {
+    if (!item.addedAt) return "Unknown date";
+    return new Date(item.addedAt).toLocaleString(undefined, { month: "long", year: "numeric" });
+  }
+  return "Games";
+}
+
+function groupShelfItems(items, sort) {
+  const groups = [];
+  const index = new Map();
+  for (const item of items) {
+    const label = groupLabel(item, sort);
+    if (!index.has(label)) {
+      index.set(label, groups.length);
+      groups.push({ label, items: [], sample: item });
+    }
+    groups[index.get(label)].items.push(item);
+  }
+  return groups;
+}
+
+function renderGameRow(item, kind = "game") {
+  const copies = gameCopies(item);
+  const facts = cubbyFacts(item);
+  const extra = copiesSummary(item);
+  const consoleName = consoleById(item.consoleId)?.name || "";
+  return `
+    <article class="list-row" ${itemOpenAttr(item, kind)}>
+      <div class="list-cover">${coverMarkup(item)}${copies.length > 1 ? `<span class="copy-count">${copies.length}</span>` : ""}</div>
+      <div class="list-body">
+        <h3>${escapeHtml(item.title)}</h3>
+        <p class="meta">${escapeHtml([consoleName, facts, extra].filter(Boolean).join(" · "))}</p>
+        ${item.notes ? `<p class="meta">${escapeHtml(item.notes)}</p>` : ""}
+      </div>
+      ${itemActions(item, kind)}
+    </article>`;
+}
+
+function renderShelf(items, status, kind = "game") {
+  if (!items.length) return "";
+  if (shelfLayout !== "list") {
+    return `<div class="kallax"><div class="grid">${items.map((item) => renderGameCard(item, kind)).join("")}</div></div>`;
+  }
+  const sort = kind === "peripheral" ? "console" : currentSort(status);
+  return `<div class="game-list">${groupShelfItems(items, sort)
+    .map((group) => {
+      const banner =
+        sort === "console"
+          ? `${consoleLogo(group.sample.consoleId, group.label)}<span>${escapeHtml(group.label)}</span>`
+          : `<span>${escapeHtml(group.label)}</span>`;
+      return `
+        <section class="list-group">
+          <h2 class="list-banner">${banner}</h2>
+          ${group.items.map((item) => renderGameRow(item, kind)).join("")}
+        </section>`;
+    })
+    .join("")}</div>`;
+}
+
 function renderGameCard(game, kind = "game") {
   const copies = gameCopies(game);
-  const openAttr = kind === "peripheral" ? `data-open-peripheral="${game.id}"` : `data-open-game="${game.id}"`;
-  const editAttr = kind === "peripheral" ? `data-edit-peripheral="${game.id}"` : `data-edit="${game.id}"`;
-  const delAttr = kind === "peripheral" ? `data-delete-peripheral="${game.id}"` : `data-delete="${game.id}"`;
-  const img = game.coverUrl
-    ? `<img data-cover="${game.id}" src="${coverSrc(game.coverUrl)}" alt="">`
-    : `<div class="cover-fallback" data-cover="${game.id}" style="background:${spineColor(game.consoleId)};aspect-ratio:${coverRatio(game.consoleId)}"></div>`;
   return `
-    <article class="card cubby" ${openAttr}>
+    <article class="card cubby" ${itemOpenAttr(game, kind)}>
       <div class="cubby-banner">${consoleLogo(game.consoleId, consoleById(game.consoleId)?.name)}</div>
       <div class="cubby-well">
         <div class="case" style="--spine:${spineColor(game.consoleId)}">
           <span class="case-spine" aria-hidden="true"></span>
           <div class="cover-block">
             <div class="cover-wrap">
-              ${img}
+              ${coverMarkup(game)}
             </div>
             ${copies.length > 1 ? `<span class="copy-count">${copies.length}</span>` : ""}
           </div>
@@ -767,15 +951,22 @@ function renderGameCard(game, kind = "game") {
           return `${facts ? `<p class="meta">${escapeHtml(facts)}</p>` : ""}${extra ? `<p class="meta">${escapeHtml(extra)}</p>` : ""}`;
         })()}
         ${game.notes ? `<p class="meta">${escapeHtml(game.notes)}</p>` : ""}
-        <div class="card-actions">
-          <button class="ghost" ${editAttr}>Edit</button>
-          ${game.status === "wishlist" ? `<button class="ghost" data-own="${kind === "peripheral" ? "p:" : ""}${game.id}">Got it</button>` : ""}
-          ${game.status === "owned" ? `<button class="ghost" data-sold="${kind === "peripheral" ? "p:" : ""}${game.id}">Sold</button>` : ""}
-          ${game.status === "sold" ? `<button class="ghost" data-unsold="${kind === "peripheral" ? "p:" : ""}${game.id}">Back on shelf</button>` : ""}
-          <button class="ghost" ${delAttr}>Remove</button>
-        </div>
+        ${itemActions(game, kind)}
       </div>
     </article>`;
+}
+
+function shelfEmpty(status) {
+  if (extraFilter.copies === "dupes") {
+    return `<div class="empty">No titles with more than one copy here.</div>`;
+  }
+  if (status === "owned") {
+    return `<div class="empty">No games here yet. If your shelf vanished, open <a href="/recover.html">recover.html</a> in this same browser.</div>`;
+  }
+  if (status === "wishlist") {
+    return `<div class="empty">Wishlist is empty. Add a title you’re hunting.</div>`;
+  }
+  return `<div class="empty">Nothing sold or traded yet. Mark a copy as sold to keep the history.</div>`;
 }
 
 function renderCollection() {
@@ -792,8 +983,8 @@ function renderCollection() {
     ${renderChips("owned")}
     ${
       games.length
-        ? `<div class="kallax"><div class="grid">${games.map(renderGameCard).join("")}</div></div>`
-        : `<div class="empty">No games here yet. If your shelf vanished, open <a href="/recover.html">recover.html</a> in this same browser.</div>`
+        ? renderShelf(games, "owned")
+        : shelfEmpty("owned")
     }`;
   hydrateCovers(games);
   fillMissingMeta("owned");
@@ -805,8 +996,8 @@ function renderWishlist() {
     ${renderChips("wishlist")}
     ${
       games.length
-        ? `<div class="kallax"><div class="grid">${games.map(renderGameCard).join("")}</div></div>`
-        : `<div class="empty">Wishlist is empty. Add a title you’re hunting.</div>`
+        ? renderShelf(games, "wishlist")
+        : shelfEmpty("wishlist")
     }`;
   hydrateCovers(games);
   fillMissingMeta("wishlist");
@@ -819,8 +1010,8 @@ function renderSold() {
     ${renderChips("sold")}
     ${
       games.length || periphs.length
-        ? `<div class="kallax"><div class="grid">${games.map(renderGameCard).join("")}${periphs.map((item) => renderGameCard(item, "peripheral")).join("")}</div></div>`
-        : `<div class="empty">Nothing sold or traded yet. Mark a copy as sold to keep the history.</div>`
+        ? `${renderShelf(games, "sold")}${renderShelf(periphs, "sold", "peripheral")}`
+        : shelfEmpty("sold")
     }`;
   hydrateCovers([...games, ...periphs]);
   fillMissingMeta("sold");
@@ -874,7 +1065,7 @@ function renderPeripherals() {
     ${renderPeripheralChips()}
     ${
       items.length
-        ? `<div class="kallax"><div class="grid">${items.map((item) => renderGameCard(item, "peripheral")).join("")}</div></div>`
+        ? renderShelf(items, "collection", "peripheral")
         : `<div class="empty">${peripheralStatus === "wishlist" ? "Wishlist is empty. Add official hardware while the Wishlist chip is selected." : "No peripherals yet. Pick a console above to add official hardware."}</div>`
     }`;
   hydrateCovers(items);
@@ -1025,7 +1216,7 @@ async function upsertGame(data) {
       }
       return next;
     });
-    if (pendingCover) await putCoverBlob(editingId, pendingCover);
+    await persistSavedCover(editingId, data.coverUrl);
     save();
     return;
   }
@@ -1041,7 +1232,7 @@ async function upsertGame(data) {
     if (data.catalogSlug && !twin.catalogSlug) twin.catalogSlug = data.catalogSlug;
     if (pendingMeta.released && !twin.released) twin.released = pendingMeta.released;
     if (pendingMeta.genres?.length && !twin.genres?.length) twin.genres = pendingMeta.genres;
-    if (pendingCover) await putCoverBlob(twin.id, pendingCover);
+    await persistSavedCover(twin.id, twin.coverUrl);
     save();
     return;
   }
@@ -1057,7 +1248,7 @@ async function upsertGame(data) {
     genres: pendingMeta.genres || [],
     copies,
   });
-  if (pendingCover) await putCoverBlob(id, pendingCover);
+  await persistSavedCover(id, data.coverUrl);
   save();
 }
 
@@ -1072,7 +1263,7 @@ async function upsertPeripheral(data) {
         copies: gameCopies(p).length ? gameCopies(p) : data.status === "owned" || data.status === "sold" ? [migrateCopyItem(data, data)] : [],
       };
     });
-    if (pendingCover) await putCoverBlob(editingId, pendingCover);
+    await persistSavedCover(editingId, data.coverUrl);
     save();
     return;
   }
@@ -1109,7 +1300,7 @@ async function addPeripheral({ consoleId, title, officialId, search, condition =
       twin.copies = [...gameCopies(twin), migrateCopyItem({ condition }, extras)];
     }
     if (coverUrl && !twin.coverUrl) twin.coverUrl = coverUrl;
-    if (pendingCover) await putCoverBlob(twin.id, pendingCover);
+    await persistSavedCover(twin.id, twin.coverUrl);
     save();
     render();
     paintOfficialList();
@@ -1131,7 +1322,7 @@ async function addPeripheral({ consoleId, title, officialId, search, condition =
     copies: status === "owned" ? [migrateCopyItem({ condition }, extras)] : [],
   };
   state.peripherals.push(item);
-  if (pendingCover) await putCoverBlob(id, pendingCover);
+  await persistSavedCover(id, coverUrl);
   save();
   render();
   paintOfficialList();
@@ -1554,14 +1745,20 @@ async function openGameDetail(id) {
   els.detailTitle.textContent = game.title;
   els.detailEdit?.classList.remove("hidden");
   els.detailCover.classList.remove("logo-cover");
-  if (game.coverUrl) {
+  const local = itemCoverSrc(game);
+  if (local) {
+    els.detailCover.src = local;
+  } else if (game.coverUrl) {
     els.detailCover.src = coverSrc(game.coverUrl);
   } else {
     els.detailCover.removeAttribute("src");
   }
   try {
     const blob = await loadCoverBlob(game.id);
-    if (blob) els.detailCover.src = URL.createObjectURL(blob);
+    if (blob) {
+      rememberCover(game.id, blob);
+      els.detailCover.src = objectUrls.get(game.id);
+    }
   } catch {
     /* ignore */
   }
@@ -1602,14 +1799,20 @@ async function openPeripheralDetail(id) {
   els.detailTitle.textContent = item.title;
   els.detailEdit?.classList.remove("hidden");
   els.detailCover.classList.remove("logo-cover");
-  if (item.coverUrl) {
+  const local = itemCoverSrc(item);
+  if (local) {
+    els.detailCover.src = local;
+  } else if (item.coverUrl) {
     els.detailCover.src = coverSrc(item.coverUrl);
   } else {
     els.detailCover.removeAttribute("src");
   }
   try {
     const blob = await loadCoverBlob(item.id);
-    if (blob) els.detailCover.src = URL.createObjectURL(blob);
+    if (blob) {
+      rememberCover(item.id, blob);
+      els.detailCover.src = objectUrls.get(item.id);
+    }
   } catch {
     /* ignore */
   }
@@ -1737,6 +1940,16 @@ function openDb() {
   });
 }
 
+async function persistSavedCover(id, coverUrl) {
+  if (pendingCover) {
+    await putCoverBlob(id, pendingCover);
+    return;
+  }
+  if (coverUrl && !objectUrls.has(id) && !localCoverIds.has(id)) {
+    await storeCoverFromUrl(id, coverUrl);
+  }
+}
+
 async function putCoverBlob(id, blob) {
   const db = await openDb();
   await new Promise((resolve, reject) => {
@@ -1745,6 +1958,7 @@ async function putCoverBlob(id, blob) {
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });
+  rememberCover(id, blob);
 }
 
 async function loadCoverBlob(id) {
@@ -1758,6 +1972,10 @@ async function loadCoverBlob(id) {
 }
 
 async function deleteCoverBlob(id) {
+  const prev = objectUrls.get(id);
+  if (prev) URL.revokeObjectURL(prev);
+  objectUrls.delete(id);
+  localCoverIds.delete(id);
   const db = await openDb();
   await new Promise((resolve, reject) => {
     const tx = db.transaction("covers", "readwrite");
@@ -1767,26 +1985,76 @@ async function deleteCoverBlob(id) {
   });
 }
 
+async function storeCoverFromUrl(id, url) {
+  if (!id || !url) return false;
+  try {
+    const res = await fetch(coverSrc(url));
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    if (!blob.size || (blob.type && !blob.type.startsWith("image/"))) return false;
+    await putCoverBlob(id, blob);
+    applyCoverNode(id, objectUrls.get(id));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function preloadCoverUrls() {
+  const items = [...(state.games || []), ...(state.peripherals || [])];
+  await Promise.all(
+    items.map(async (item) => {
+      if (objectUrls.has(item.id)) {
+        localCoverIds.add(item.id);
+        return;
+      }
+      try {
+        const blob = await loadCoverBlob(item.id);
+        if (blob) rememberCover(item.id, blob);
+      } catch {
+        /* skip */
+      }
+    })
+  );
+}
+
+async function backfillCoverBlobs() {
+  const items = [...(state.games || []), ...(state.peripherals || [])];
+  for (const item of items) {
+    if (objectUrls.has(item.id) || localCoverIds.has(item.id)) continue;
+    try {
+      const blob = await loadCoverBlob(item.id);
+      if (blob) {
+        rememberCover(item.id, blob);
+        applyCoverNode(item.id, objectUrls.get(item.id));
+        continue;
+      }
+    } catch {
+      /* skip */
+    }
+    if (item.coverUrl) await storeCoverFromUrl(item.id, item.coverUrl);
+  }
+}
+
 async function hydrateCovers(games) {
-  for (const url of objectUrls.values()) URL.revokeObjectURL(url);
-  objectUrls.clear();
   await Promise.all(
     games.map(async (game) => {
-      const blob = await loadCoverBlob(game.id);
-      if (!blob) return;
-      const node = document.querySelector(`[data-cover="${game.id}"]`);
-      if (!node) return;
-      const obj = URL.createObjectURL(blob);
-      objectUrls.set(game.id, obj);
-      if (node.tagName === "IMG") {
-        node.src = obj;
-      } else {
-        const img = document.createElement("img");
-        img.dataset.cover = game.id;
-        img.src = obj;
-        img.alt = "";
-        node.replaceWith(img);
+      const cached = objectUrls.get(game.id);
+      if (cached) {
+        applyCoverNode(game.id, cached);
+        return;
       }
+      try {
+        const blob = await loadCoverBlob(game.id);
+        if (blob) {
+          rememberCover(game.id, blob);
+          applyCoverNode(game.id, objectUrls.get(game.id));
+          return;
+        }
+      } catch {
+        /* fall through */
+      }
+      if (game.coverUrl) applyCoverNode(game.id, coverSrc(game.coverUrl));
     })
   );
 }
@@ -1867,6 +2135,18 @@ async function fillMissingMeta(status) {
 }
 
 async function fetchItemCover(item, kind) {
+  if (!item?.id) return;
+  if (objectUrls.has(item.id) || localCoverIds.has(item.id)) return;
+  try {
+    const existing = await loadCoverBlob(item.id);
+    if (existing) {
+      rememberCover(item.id, existing);
+      applyCoverNode(item.id, objectUrls.get(item.id));
+      return;
+    }
+  } catch {
+    /* lookup */
+  }
   const q = item.searchQuery || item.title;
   try {
     const res = await fetch(
@@ -1875,6 +2155,7 @@ async function fetchItemCover(item, kind) {
     const data = await res.json();
     if (data.cover) {
       item.coverUrl = data.cover;
+      await storeCoverFromUrl(item.id, data.cover);
       save();
     }
   } catch {
@@ -1892,9 +2173,12 @@ async function fillMissingCovers() {
   const kind = view === "peripherals" ? "peripheral" : "game";
   const missing = [];
   for (const item of pool) {
-    if (item.coverUrl) continue;
+    if (hasCover(item)) continue;
     const local = await loadCoverBlob(item.id);
-    if (local) continue;
+    if (local) {
+      rememberCover(item.id, local);
+      continue;
+    }
     missing.push(item);
   }
   if (!missing.length) {
@@ -1914,49 +2198,64 @@ async function fillMissingCovers() {
 
 function rankSearchHits(items, query) {
   const want = normalizeTitle(query);
-  if (!want) return [];
   return items
     .map((item) => {
       const got = normalizeTitle(item.title);
       const subtitle = String(item.subtitle || "").toLowerCase();
-      let score = 0;
-      if (got === want) score = 100;
-      else if (got.startsWith(want) || want.startsWith(got)) score = 80;
-      else if (got.includes(want) || want.includes(got)) score = 55;
-      else if (/video game/.test(subtitle)) score = 20;
+      let score = 10;
+      if (want) {
+        if (got === want) score = 100;
+        else if (got.startsWith(want) || want.startsWith(got)) score = 80;
+        else if (got.includes(want) || want.includes(got)) score = 55;
+        else if (/video game/.test(subtitle)) score = 20;
+      }
       if (/\b(film|movie|tv series|album|song|band|company|magazine)\b/.test(subtitle)) score -= 40;
       return { item, score };
     })
-    .filter((row) => row.score >= 55)
+    .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 6)
+    .slice(0, 12)
     .map((row) => row.item);
 }
 
+function flattenCoverPicks(items) {
+  const picks = [];
+  const seen = new Set();
+  for (const item of items) {
+    const urls = [item.cover, ...(item.images || [])].filter(Boolean);
+    for (const url of urls) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+      picks.push({ ...item, cover: url });
+    }
+  }
+  return picks.slice(0, 36);
+}
+
 function showSearchResults(items, source) {
-  if (!items.length) {
-    els.searchResults.innerHTML = `<button type="button" class="search-hit muted" disabled>No catalog matches — keep the name you typed.</button>`;
+  const picks = flattenCoverPicks(items);
+  if (!picks.length) {
+    els.searchResults.innerHTML = `<button type="button" class="search-hit muted" disabled>No pictures found — keep the name you typed, or upload a cover.</button>`;
     els.searchResults.classList.remove("hidden");
     return;
   }
   const credit =
     source === "rawg"
-      ? `<p class="search-credit">Results from <a href="https://rawg.io" target="_blank" rel="noopener">RAWG</a></p>`
-      : `<p class="search-credit">Wikipedia results. Add a RAWG key under Catalog for a proper games database.</p>`;
+      ? `<p class="search-credit">Click a picture for the cover. Your title stays as typed. <a href="https://rawg.io" target="_blank" rel="noopener">RAWG</a></p>`
+      : source === "mixed"
+        ? `<p class="search-credit">Click a picture for the cover. Your title stays as typed. Wikipedia + <a href="https://rawg.io" target="_blank" rel="noopener">RAWG</a></p>`
+        : `<p class="search-credit">Click a picture for the cover. Your title stays as typed. Wikipedia — add a RAWG key under Catalog for more shots.</p>`;
   els.searchResults.innerHTML =
-    items
+    `<div class="search-cover-grid">${picks
       .map(
         (item, index) => `
-      <button type="button" class="search-hit" data-pick-game="${index}">
+      <button type="button" class="cover-pick" data-pick-cover="${index}" title="${escapeHtml(item.title || "")}">
         ${item.cover ? `<img src="${coverSrc(item.cover)}" alt="">` : `<span class="hit-fallback"></span>`}
-        <span>
-          <strong>${escapeHtml(item.title)}</strong>
-          <em>${escapeHtml(item.subtitle || "")}</em>
-        </span>
+        <span>${escapeHtml(item.title || "")}</span>
       </button>`
       )
-      .join("") + credit;
-  els.searchResults.items = items;
+      .join("")}</div>` + credit;
+  els.searchResults.items = picks;
   els.searchResults.classList.remove("hidden");
 }
 
@@ -2017,6 +2316,23 @@ els.catalogBtn?.addEventListener("click", async () => {
   }
   els.catalogDialog?.showModal();
 });
+els.themeBtn?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setThemeMenuOpen(els.themePanel?.classList.contains("hidden"));
+});
+els.themeGrid?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-theme]");
+  if (!btn) return;
+  applyTheme(btn.dataset.theme);
+  setThemeMenuOpen(false);
+});
+document.addEventListener("click", (event) => {
+  if (!els.themeMenu || els.themePanel?.classList.contains("hidden")) return;
+  if (!els.themeMenu.contains(event.target)) setThemeMenuOpen(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setThemeMenuOpen(false);
+});
 els.catalogCancel?.addEventListener("click", () => els.catalogDialog.close());
 els.catalogForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2071,24 +2387,24 @@ els.form.elements.title.addEventListener("input", () => {
 });
 
 els.searchResults.addEventListener("click", (event) => {
-  const hit = event.target.closest("[data-pick-game]");
+  const hit = event.target.closest("[data-pick-cover]");
   if (!hit) return;
-  const item = els.searchResults.items?.[Number(hit.dataset.pickGame)];
+  const item = els.searchResults.items?.[Number(hit.dataset.pickCover)];
   if (!item) return;
-  els.form.elements.title.value = item.title;
   els.form.elements.coverUrl.value = item.cover || "";
-  els.form.elements.catalogSlug.value = item.slug || "";
+  if (item.slug) els.form.elements.catalogSlug.value = item.slug;
   pendingMeta = {
-    released: item.released || "",
-    genres: Array.isArray(item.genres) ? item.genres : [],
+    released: item.released || pendingMeta.released || "",
+    genres: Array.isArray(item.genres) && item.genres.length ? item.genres : pendingMeta.genres || [],
   };
   pendingCover = null;
   setCoverPreview(item.cover, null);
-  els.searchResults.classList.add("hidden");
+  els.searchResults.querySelectorAll(".cover-pick").forEach((node) => {
+    node.classList.toggle("picked", node === hit);
+  });
 });
 
 els.consolePicker.addEventListener("click", (event) => {
-  els.searchResults.classList.add("hidden");
   const btn = event.target.closest("[data-pick]");
   if (!btn) return;
   els.form.elements.consoleId.value = btn.dataset.pick;
@@ -2142,6 +2458,25 @@ els.form.addEventListener("submit", async (event) => {
   else setView("collection");
 });
 
+document.body.addEventListener("pointermove", (event) => {
+  const cubby = event.target.closest(".grid .card.cubby");
+  if (!cubby || cubby.classList.contains("fly-source")) return;
+  const box = cubby.getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  const x = Math.max(-1, Math.min(1, ((event.clientX - box.left) / box.width) * 2 - 1));
+  const y = Math.max(-1, Math.min(1, ((event.clientY - box.top) / box.height) * 2 - 1));
+  cubby.style.setProperty("--mx", x.toFixed(3));
+  cubby.style.setProperty("--my", y.toFixed(3));
+});
+
+document.body.addEventListener("pointerout", (event) => {
+  const cubby = event.target.closest(".grid .card.cubby");
+  if (!cubby) return;
+  if (event.relatedTarget && cubby.contains(event.relatedTarget)) return;
+  cubby.style.setProperty("--mx", "0");
+  cubby.style.setProperty("--my", "0");
+});
+
 document.body.addEventListener("click", (event) => {
   if (event.target.closest(".card-actions")) {
     event.stopPropagation();
@@ -2157,6 +2492,19 @@ document.body.addEventListener("click", (event) => {
   if (reverse) {
     const which = reverse.dataset.sortReverse;
     sortReverse[which] = !sortReverse[which];
+    writeSavedSort();
+    render();
+    return;
+  }
+  const copiesFilter = event.target.closest("[data-copies-filter]");
+  if (copiesFilter) {
+    extraFilter.copies = extraFilter.copies === "dupes" ? "all" : "dupes";
+    render();
+    return;
+  }
+  const layoutToggle = event.target.closest("[data-layout-toggle]");
+  if (layoutToggle) {
+    shelfLayout = shelfLayout === "list" ? "grid" : "list";
     writeSavedSort();
     render();
     return;
@@ -2440,21 +2788,24 @@ els.importInput?.addEventListener("change", async () => {
   save();
   render();
   els.importInput.value = "";
-  fillMissingCovers();
+  backfillCoverBlobs();
 });
 
 state = load();
 readSavedSort();
+applyTheme(currentTheme());
 if (state.games.length) save();
-try {
-  setView("collection");
-  fillMissingCovers();
-} catch (err) {
-  console.error(err);
-  if (els.views.collection) {
-    els.views.collection.innerHTML = `<div class="empty">${escapeHtml(err.message || "The shelf failed to load. Refresh once.")}</div>`;
-  }
-}
+preloadCoverUrls()
+  .then(() => {
+    setView("collection");
+    backfillCoverBlobs();
+  })
+  .catch((err) => {
+    console.error(err);
+    if (els.views.collection) {
+      els.views.collection.innerHTML = `<div class="empty">${escapeHtml(err.message || "The shelf failed to load. Refresh once.")}</div>`;
+    }
+  });
 fetch("/api/settings")
   .then((res) => res.json())
   .then(applyMarketSettings)

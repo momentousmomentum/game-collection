@@ -13,6 +13,14 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
+    <script>
+      (function () {
+        const theme = localStorage.getItem("game-shelf-theme") || "shelf";
+        const light = { snes: 1, "snes-pal": 1, ps1: 1, ps5: 1, dreamcast: 1, "dreamcast-pal": 1, xbox360: 1, wii: 1 };
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.scheme = light[theme] ? "light" : "dark";
+      })();
+    </script>
   </head>
   <body>
     <div class="app">
@@ -27,18 +35,28 @@
         <nav class="nav">
           <button type="button" data-view="collection" class="active">Games collection</button>
           <button type="button" data-view="wishlist">Games wishlist</button>
-          <button type="button" data-view="sold">Sold / traded</button>
-          <button type="button" data-view="finn">Market</button>
           <button type="button" data-view="consoles">Console Collection</button>
           <button type="button" data-view="peripherals">Peripherals collection</button>
-          <button type="button" id="catalog-btn">Catalog</button>
+          <div class="nav-tools">
+            <button type="button" data-view="sold">Sold / traded</button>
+            <button type="button" data-view="finn">Market</button>
+            <button type="button" id="catalog-btn">Settings</button>
+          </div>
         </nav>
         <div class="rail-foot">
-          <button type="button" id="export-btn" class="ghost">Export</button>
-          <label class="ghost file-btn">
-            Import
-            <input id="import-input" type="file" accept="application/json" hidden />
-          </label>
+          <div class="theme-menu" id="theme-menu">
+            <button type="button" id="theme-btn" class="ghost" aria-haspopup="true" aria-expanded="false" aria-controls="theme-panel">Theme</button>
+            <div class="theme-panel hidden" id="theme-panel" role="menu">
+              <div class="theme-grid" id="theme-grid"></div>
+            </div>
+          </div>
+          <div class="rail-foot-actions">
+            <button type="button" id="export-btn" class="ghost">Export</button>
+            <label class="ghost file-btn">
+              Import
+              <input id="import-input" type="file" accept="application/json" hidden />
+            </label>
+          </div>
         </div>
       </aside>
 
@@ -82,7 +100,7 @@
         </div>
         <label class="title-search">
           Title
-          <input name="title" required maxlength="160" placeholder="Start typing a title…" autocomplete="off" />
+          <input name="title" required maxlength="160" placeholder="Type a search — click a picture for the cover" autocomplete="off" />
           <div id="search-results" class="search-results hidden"></div>
         </label>
         <div class="picker-block">
@@ -173,7 +191,7 @@
 
     <dialog id="catalog-dialog">
       <form id="catalog-form">
-        <h2>Game catalog</h2>
+        <h2>Settings</h2>
         <p class="meta">Wikipedia is a general encyclopedia, so title matches are messy. RAWG is a games database. Get a free key at <a href="https://rawg.io/apidocs" target="_blank" rel="noopener">rawg.io/apidocs</a>. Pick FINN, Blocket, Tori, DBA, or another market on the Market tab — that also sets shelf currency. eBay listing checks use a free App ID from <a href="https://developer.ebay.com/" target="_blank" rel="noopener">developer.ebay.com</a>. Leave a key field blank to keep the key you already saved.</p>
         <p class="meta" id="catalog-status"></p>
         <label>

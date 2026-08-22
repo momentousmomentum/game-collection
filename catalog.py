@@ -93,6 +93,22 @@ def _clip(text: str, limit: int = 720) -> str:
     return cut.rstrip(",;:") + "…"
 
 
+def _images_from_rawg(game: dict) -> list[str]:
+    urls = []
+    seen = set()
+    extras = []
+    for shot in game.get("short_screenshots") or []:
+        if isinstance(shot, dict):
+            extras.append(shot.get("image"))
+    for raw in [game.get("background_image"), *extras]:
+        url = str(raw or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
 def _hit(game: dict) -> dict:
     released = (game.get("released") or "")[:10]
     genres = [
@@ -107,10 +123,12 @@ def _hit(game: dict) -> dict:
     ]
     year = released[:4]
     subtitle = " · ".join(part for part in (year, ", ".join(platforms)) if part)
+    images = _images_from_rawg(game)
     return {
         "title": game.get("name") or "",
         "subtitle": subtitle,
-        "cover": game.get("background_image"),
+        "cover": images[0] if images else None,
+        "images": images,
         "slug": game.get("slug") or "",
         "released": released,
         "genres": genres,
@@ -120,7 +138,7 @@ def _hit(game: dict) -> dict:
 def search_rawg(query: str, platform: str) -> list[dict]:
     if not rawg_key():
         return []
-    params = {"search": query, "page_size": 8}
+    params = {"search": query, "page_size": 12}
     platform_id = RAWG_PLATFORMS.get(platform)
     if platform_id:
         params["platforms"] = str(platform_id)
@@ -128,10 +146,10 @@ def search_rawg(query: str, platform: str) -> list[dict]:
         payload = _rawg_get("/games", params) or {}
         results = payload.get("results") or []
         if not results and platform_id:
-            payload = _rawg_get("/games", {"search": query, "page_size": 8}) or {}
+            payload = _rawg_get("/games", {"search": query, "page_size": 12}) or {}
             results = payload.get("results") or []
         if results and not any(game.get("background_image") for game in results):
-            payload = _rawg_get("/games", {"search": query, "page_size": 8}) or {}
+            payload = _rawg_get("/games", {"search": query, "page_size": 12}) or {}
             extra = payload.get("results") or []
             if extra:
                 results = extra
